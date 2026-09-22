@@ -22,7 +22,7 @@ const scrollTo = (y) => ov((y) => { window.__ov.view.scrollDOM.scrollTop = y; },
 const settle = () => page.waitForTimeout(250);
 
 // 1. Round trip: the editor's text is the file, byte for byte.
-const same = await ov(() => window.__ov.view.state.doc.toString() === window.__ov.source);
+const same = await ov(() => window.__ov.view.state.sliceDoc() === window.__ov.source);
 console.log("round-trip identical:", same);
 
 // 2. Reading views, caret parked at the end so nothing near the top is revealed.
@@ -52,5 +52,11 @@ await settle();
 const typed = await ov(() => window.__ov.view.state.doc.toString());
 console.log("typed source:", JSON.stringify(typed));
 await page.screenshot({ path: `${out}/5-typed.png`, clip: { x: 0, y: 0, width: 1100, height: 420 } });
+
+// 4. Loading and saving CRLF text preserves its line endings.
+const crlf = "# A\r\n\r\nb\r\n";
+await ov((text) => window.__ov.load(text), crlf);
+const crlfSame = await ov((text) => window.__ov.view.state.sliceDoc() === text, crlf);
+console.log("crlf round-trip identical:", crlfSame);
 
 await browser.close();

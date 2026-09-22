@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "shot": "node scripts/shot.mjs"
+    "shot": "node scripts/shot.mjs",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

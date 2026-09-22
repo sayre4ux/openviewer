@@ -43,6 +43,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "fileAssociations": [
+      { "ext": ["md", "markdown"], "name": "Markdown", "description": "Markdown document", "role": "Editor", "rank": "Alternate" }
+    ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
