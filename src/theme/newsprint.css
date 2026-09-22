@@ -1,0 +1,279 @@
+/* Newsprint writing surface for OpenViewer. Values follow Typora's Newsprint theme; the
+   rules are written for CodeMirror's line-based DOM. PT Serif is bundled (SIL OFL). */
+
+@font-face {
+  font-family: "PT Serif";
+  font-style: normal;
+  font-weight: 400;
+  src: url("/fonts/PTSerif-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "PT Serif";
+  font-style: italic;
+  font-weight: 400;
+  src: url("/fonts/PTSerif-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "PT Serif";
+  font-style: normal;
+  font-weight: 700;
+  src: url("/fonts/PTSerif-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "PT Serif";
+  font-style: italic;
+  font-weight: 700;
+  src: url("/fonts/PTSerif-BoldItalic.woff2") format("woff2");
+}
+
+:root {
+  --paper: #f3f2ee;
+  --ink: #1f0909;
+  --muted: #656565;
+  --meta: #999;
+  --rule: #c5c5c5;
+  --quote-bar: #bababa;
+  --code-bg: #dadada;
+  --link: #065588;
+  --selection-bg: rgba(32, 43, 51, 0.63);
+  --serif: "PT Serif", "Times New Roman", Times, serif;
+  --mono: Menlo, "Ubuntu Mono", Consolas, "Courier New", monospace;
+  --column: 40em;
+  --gutter: 30px;
+  --line: 1.5rem; /* 24px: body line-height, also Newsprint's paragraph gap */
+}
+
+@media (min-width: 1400px) {
+  :root {
+    --column: 914px;
+  }
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+#editor {
+  height: 100%;
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: #fff;
+}
+
+/* ---------- Editor frame ---------- */
+
+#editor .cm-editor {
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 1rem;
+}
+#editor .cm-editor.cm-focused {
+  outline: none;
+}
+#editor .cm-scroller {
+  font-family: inherit;
+  line-height: var(--line);
+  overflow-y: auto;
+}
+#editor .cm-content {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--column) + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: 60px var(--gutter) 40vh;
+  caret-color: var(--ink);
+}
+#editor .cm-line {
+  padding: 0;
+}
+#editor .cm-cursor {
+  border-left-color: var(--ink);
+}
+
+#editor .cm-scroller::-webkit-scrollbar {
+  width: 8px;
+}
+#editor .cm-scroller::-webkit-scrollbar-thumb {
+  background: rgba(31, 9, 9, 0.18);
+  border-radius: 4px;
+}
+#editor .cm-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Revealed Markdown syntax while the caret is inside a token. */
+#editor .cm-md-mark {
+  color: var(--meta);
+  font-style: normal;
+  font-weight: 400;
+}
+
+/* ---------- Headings ---------- */
+
+#editor .cm-md-h {
+  font-weight: 700;
+}
+#editor .cm-md-h1 {
+  font-size: 1.875em;
+  line-height: 1.3em;
+  font-weight: 400;
+  padding-top: 0.7em;
+  padding-bottom: 0.8125em;
+  border-bottom: 1px solid var(--rule);
+}
+#editor .cm-md-h2,
+#editor .cm-md-h3 {
+  font-size: 1.3125em;
+  line-height: 1.15;
+  padding-top: 1.2em;
+  padding-bottom: 0.2em;
+}
+#editor .cm-md-h3 {
+  font-weight: 400;
+}
+#editor .cm-md-h4 {
+  font-size: 1.125em;
+  padding-top: 1.3em;
+}
+#editor .cm-md-h5,
+#editor .cm-md-h6 {
+  font-size: 1em;
+  padding-top: 1em;
+}
+#editor .cm-md-setext-mark.is-hidden {
+  line-height: 4px;
+}
+
+/* ---------- Inline ---------- */
+
+#editor .cm-md-strong {
+  font-weight: 700;
+}
+#editor .cm-md-em {
+  font-style: italic;
+}
+#editor .cm-md-strike {
+  text-decoration: line-through;
+}
+#editor .cm-md-code {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  background: var(--code-bg);
+  padding: 0 2px;
+}
+#editor .cm-md-link,
+#editor .cm-md-link .cm-md-strong,
+#editor .cm-md-link .cm-md-em {
+  color: var(--link);
+  text-decoration: none;
+}
+#editor .cm-md-link:hover {
+  text-decoration: underline;
+}
+#editor .cm-md-image {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+/* ---------- Blockquote ---------- */
+
+#editor .cm-md-quote {
+  font-style: italic;
+  color: var(--muted);
+  border-left: 5px solid var(--quote-bar);
+  margin-left: 2em;
+  padding-left: 1em;
+}
+
+/* ---------- Lists: hanging indent, bullet sits in the gutter ---------- */
+
+#editor .cm-md-li {
+  --marker: 30px;
+  padding-left: calc(var(--li-depth) * (1.5em + var(--marker)));
+}
+#editor .cm-md-li-first {
+  text-indent: calc(-1 * var(--marker));
+  padding-top: 0.25em;
+}
+#editor .cm-md-bullet {
+  display: inline-block;
+  box-sizing: border-box;
+  width: var(--marker);
+  padding-right: 0.7em;
+  text-align: right;
+  text-indent: 0;
+  font-style: normal;
+  font-weight: 400;
+  user-select: none;
+}
+#editor .cm-md-bullet-ol {
+  padding-right: 0.45em;
+}
+#editor .cm-md-task {
+  color: #ddd;
+  cursor: pointer;
+}
+#editor .cm-md-task.is-checked {
+  color: inherit;
+}
+
+/* ---------- Horizontal rule ---------- */
+
+#editor .cm-md-hr {
+  position: relative;
+}
+#editor .cm-md-hr::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-bottom: 1px solid var(--rule);
+}
+#editor .cm-md-hr.is-active::after {
+  display: none;
+}
+
+/* ---------- Code blocks: flat gray slab; fence lines become its padding ---------- */
+
+#editor .cm-md-fence {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  line-height: 1.714285em;
+  background: var(--code-bg);
+  margin-left: 2em;
+  padding: 0 1ch;
+}
+#editor .cm-md-fence-delim {
+  color: var(--meta);
+}
+#editor .cm-md-fence-delim.is-hidden {
+  line-height: 0.8em;
+  font-size: 0.875em;
+}
+#editor .cm-md-raw {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  color: var(--muted);
+}
+
+/* ---------- Source mode (⌘/) ---------- */
+
+#editor .ov-source .cm-content {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+}
