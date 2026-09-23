@@ -217,7 +217,14 @@ export async function startShell(
 
   window.addEventListener("openviewer:open-link", (event) => {
     const href = (event as CustomEvent<string>).detail;
-    if (/^(https?:|mailto:)/i.test(href)) void openUrl(href);
+    // new URL lowercases the scheme; the opener's URL scope is case-sensitive (HTTP://x wouldn't open).
+    let url: URL;
+    try {
+      url = new URL(href);
+    } catch {
+      return;
+    }
+    if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:") void openUrl(url.href);
   });
   for (const pending of await call<string[]>("frontend_ready")) await openPath(pending);
   // Opened by File → Open while no document window existed.

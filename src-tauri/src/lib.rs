@@ -67,7 +67,7 @@ fn authorize_document<R: Runtime>(app: &tauri::AppHandle<R>, path: &Path, allow_
 }
 
 const DOCUMENT_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
-const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico", "tif", "tiff"];
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "heic", "heif", "bmp", "ico", "tif", "tiff"];
 // The asset protocol reads an image to the end, so a huge file next to a note would exhaust memory.
 const IMAGE_LIMIT: u64 = 32 * 1024 * 1024;
 
@@ -81,22 +81,36 @@ fn has_extension(path: &Path, list: &[&str]) -> bool {
 // would open every file in the home folder to any Markdown file under it.
 fn image_root(document: &Path, home: Option<&Path>) -> Option<PathBuf> {
   let folder = document.parent()?;
-  let repo = folder.ancestors().find(|dir| dir.join(".git").exists());
+  let repo = folder.ancestors().find(|dir| is_git_repository(dir));
   Some(match repo {
     Some(root) if root.parent().is_some() && Some(root) != home => root.to_path_buf(),
     _ => folder.to_path_buf(),
   })
 }
 
+// A real repository: a `.git` folder with a HEAD file, or a `.git` file pointing at one (worktrees,
+// submodules). A stray `.git` entry, e.g. from an extracted archive, doesn't widen the image root.
+fn is_git_repository(dir: &Path) -> bool {
+  let git = dir.join(".git");
+  match fs::symlink_metadata(&git) {
+    Ok(meta) if meta.is_dir() => git.join("HEAD").is_file(),
+    Ok(meta) if meta.is_file() && meta.len() < 4096 => fs::read_to_string(&git).is_ok_and(|t| t.starts_with("gitdir:")),
+    _ => false,
+  }
+}
+
 // A local image the document may show: inside its image root after resolving symlinks, a regular file,
-// an image type, and not too large.
+// an image type, and not too large. When the root is the home folder or the disk root (a note saved
+// directly there), only images in that same folder count, not every folder below it.
 fn scoped_image_path(document: &Path, source: &Path, home: Option<&Path>) -> Option<PathBuf> {
   let document = fs::canonicalize(document).ok()?;
   let root = image_root(&document, home)?;
   let candidate = if source.is_absolute() { source.to_path_buf() } else { document.parent()?.join(source) };
   let image = fs::canonicalize(candidate).ok()?;
   let meta = fs::metadata(&image).ok()?;
-  let ok = image.starts_with(&root) && meta.is_file() && meta.len() <= IMAGE_LIMIT && has_extension(&image, IMAGE_EXTENSIONS);
+  let broad = Some(root.as_path()) == home || root.parent().is_none();
+  let inside = if broad { image.parent() == Some(root.as_path()) } else { image.starts_with(&root) };
+  let ok = inside && meta.is_file() && meta.len() <= IMAGE_LIMIT && has_extension(&image, IMAGE_EXTENSIONS);
   ok.then_some(image)
 }
 
@@ -115,9 +129,13 @@ fn resolve_image_path<R: Runtime>(
   image.to_str().map(str::to_owned)
 }
 
-// Dropped files that may be opened as documents: a document extension and a regular file.
+// Dropped files that may be opened as documents: a regular file whose dropped name and resolved
+// target both have a document extension, so a `notes.md` symlink to `~/.ssh/id_rsa` isn't authorized.
 fn droppable_documents(paths: &[PathBuf]) -> Vec<&PathBuf> {
-  paths.iter().filter(|p| has_extension(p, DOCUMENT_EXTENSIONS) && fs::metadata(p).is_ok_and(|m| m.is_file())).collect()
+  paths.iter().filter(|p| {
+    has_extension(p, DOCUMENT_EXTENSIONS)
+      && fs::canonicalize(p).is_ok_and(|t| has_extension(&t, DOCUMENT_EXTENSIONS) && t.is_file())
+  }).collect()
 }
 
 // Async so Tauri runs these off the main thread: a blocking dialog on the main thread hangs macOS.
@@ -442,12 +460,18 @@ pub fn run() {
       }
       tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
         let app = window.app_handle();
-        // Tauri adds every dropped file and folder to the asset scope. Take that back: documents are read
-        // through read_document, and images are allowed one at a time by resolve_image_path.
-        // DECISION: dropping a folder forbids it for this session, even if a document inside it is open.
+        // Tauri adds every dropped file and folder to the asset scope. A dropped file only becomes
+        // displayable as an image (page script can't read its pixels across origins), but a dropped folder
+        // would open its whole tree, so take that back. A forbid lasts for the session and wins over
+        // resolve_image_path's allows, so folders holding an open document are left alone.
+        // DECISION: dropped single files stay in the scope; they are what the user chose to drop.
         let scope = app.asset_protocol_scope();
-        for path in paths {
-          let _ = if path.is_dir() { scope.forbid_directory(path, true) } else { scope.forbid_file(path) };
+        let documents: Vec<PathBuf> = app.state::<AuthorizedDocuments>().0.lock().unwrap().iter().cloned().collect();
+        for dir in paths.iter().filter(|p| p.is_dir()) {
+          let canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+          if !documents.iter().any(|d| d.starts_with(&canonical)) {
+            let _ = scope.forbid_directory(dir, true);
+          }
         }
         if window.label() != "preferences" {
           let allowed: Vec<_> = droppable_documents(paths).into_iter().filter_map(|p| authorize_document(app, p, false).ok()).collect();
@@ -640,6 +664,7 @@ mod tests {
     let dir = fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("openviewer-repo-{}-{}", std::process::id(), TEMP_ID.fetch_add(1, Ordering::Relaxed)));
     let repo = dir.join("project");
     fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     fs::create_dir_all(repo.join("docs")).unwrap();
     fs::create_dir_all(repo.join("images")).unwrap();
     let doc = repo.join("docs/page.md");
@@ -657,7 +682,27 @@ mod tests {
     assert_eq!(scoped_image_path(&doc, Path::new("../images/huge.png"), None), None); // over the limit
     // A repository at the home folder is ignored: only the document's own folder counts.
     assert_eq!(scoped_image_path(&doc, Path::new("../images/x.png"), Some(&repo)), None);
+    // A stray `.git` without HEAD (e.g. from an extracted archive) is not a repository.
+    let stray = dir.join("stray");
+    fs::create_dir_all(stray.join(".git")).unwrap();
+    fs::create_dir_all(stray.join("sub")).unwrap();
+    fs::write(stray.join("sub/page.md"), "").unwrap();
+    fs::write(stray.join("pic.png"), "png").unwrap();
+    assert_eq!(scoped_image_path(&stray.join("sub/page.md"), Path::new("../pic.png"), None), None);
     let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn a_note_in_the_home_folder_sees_only_that_folder() {
+    let home = fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("openviewer-home-{}-{}", std::process::id(), TEMP_ID.fetch_add(1, Ordering::Relaxed)));
+    fs::create_dir_all(home.join("Library/Photos")).unwrap();
+    fs::write(home.join("note.md"), "").unwrap();
+    fs::write(home.join("here.png"), "png").unwrap();
+    fs::write(home.join("Library/Photos/private.png"), "png").unwrap();
+    let note = home.join("note.md");
+    assert_eq!(scoped_image_path(&note, Path::new("here.png"), Some(&home)), Some(home.join("here.png")));
+    assert_eq!(scoped_image_path(&note, Path::new("Library/Photos/private.png"), Some(&home)), None);
+    let _ = fs::remove_dir_all(home);
   }
 
   #[test]
@@ -665,7 +710,8 @@ mod tests {
     let dir = path("drop");
     fs::create_dir_all(dir.join("folder.md")).unwrap();
     for name in ["note.md", "Read.MARKDOWN", "photo.png", "key"] { fs::write(dir.join(name), "").unwrap(); }
-    let paths: Vec<PathBuf> = ["note.md", "Read.MARKDOWN", "photo.png", "key", "folder.md", "missing.md"].iter().map(|n| dir.join(n)).collect();
+    std::os::unix::fs::symlink(dir.join("key"), dir.join("disguised.md")).unwrap();
+    let paths: Vec<PathBuf> = ["note.md", "Read.MARKDOWN", "photo.png", "key", "folder.md", "missing.md", "disguised.md"].iter().map(|n| dir.join(n)).collect();
     let accepted: Vec<_> = droppable_documents(&paths).into_iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
     assert_eq!(accepted, ["note.md", "Read.MARKDOWN"]);
     let _ = fs::remove_dir_all(dir);
