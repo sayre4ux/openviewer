@@ -1,14 +1,10 @@
 [package]
 name = "openviewer"
 version = "0.1.0"
-description = "OpenViewer Markdown editor"
-authors = []
-license = ""
-repository = ""
+description = "A Typora-style Markdown editor for macOS with the Newsprint look"
 edition = "2021"
 rust-version = "1.77.2"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+publish = false
 
 [lib]
 name = "app_lib"
@@ -24,5 +20,4 @@ log = "0.4"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"

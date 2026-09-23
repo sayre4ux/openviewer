@@ -1,13 +1,17 @@
 {
   "name": "openviewer",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "shot": "node scripts/shot.mjs",
-    "tauri": "tauri"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
+    "test:all": "node scripts/test.mjs --webkit",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build --bundles app"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -21,7 +25,6 @@
     "@lezer/markdown": "^1.7.2",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.3",
-    "@tauri-apps/plugin-fs": "^2.5.2",
     "@tauri-apps/plugin-opener": "^2.5.5"
   },
   "devDependencies": {
@@ -29,5 +32,6 @@
     "playwright": "^1.63.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
-  }
+  },
+  "description": "A Typora-style Markdown editor for macOS with the Newsprint look"
 }

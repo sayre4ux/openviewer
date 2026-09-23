@@ -225,5 +225,5 @@ void store.load().then((loaded) => {
 });
 render();
 
-// Test hook for the browser build.
-(window as unknown as { __prefs: unknown }).__prefs = { get overrides() { return overrides; } };
+// Test hook for the browser build (never in the app).
+if (!native) (window as unknown as { __prefs: unknown }).__prefs = { get overrides() { return overrides; } };

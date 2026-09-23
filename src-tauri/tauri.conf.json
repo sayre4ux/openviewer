@@ -22,13 +22,24 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' asset: http://asset.localhost https: http: data: blob:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'"
+      },
       "assetProtocol": {
         "enable": true,
         "scope": [
           "**"
         ]
-      }
+      },
+      "devCsp": null
     }
   },
   "bundle": {
@@ -44,10 +55,16 @@
       "icons/icon.ico"
     ],
     "fileAssociations": [
-      { "ext": ["md", "markdown"], "name": "Markdown", "description": "Markdown document", "role": "Editor", "rank": "Alternate" }
-    ],
-    "android": {
-      "debugApplicationIdSuffix": ".debug"
-    }
+      {
+        "ext": [
+          "md",
+          "markdown"
+        ],
+        "name": "Markdown",
+        "description": "Markdown document",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ]
   }
 }

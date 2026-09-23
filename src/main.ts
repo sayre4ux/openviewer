@@ -212,8 +212,8 @@ void startShell(doc, commands, () => ({ ...modes }), (notify) => {
   modesChanged = notify;
 });
 
-// Browser-mode test hook; load() establishes a clean saved baseline.
-(window as unknown as { __ov: unknown }).__ov = {
+// Test hook for the browser build (never in the app); load() establishes a clean saved baseline.
+if (!native) (window as unknown as { __ov: unknown }).__ov = {
   view,
   source: sample,
   load: (text: string) => load(text),

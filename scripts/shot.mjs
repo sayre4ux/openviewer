@@ -1,4 +1,4 @@
-// Screenshot and behavior checks for the editor running under `vite`.
+// Screenshots and round-trip checks for the editor running under `vite` (browser mode).
 // Usage: node scripts/shot.mjs <outDir> [chromium|webkit]
 import { chromium, webkit } from "playwright";
 import { mkdirSync } from "node:fs";
@@ -24,6 +24,7 @@ const settle = () => page.waitForTimeout(250);
 // 1. Round trip: the editor's text is the file, byte for byte.
 const same = await ov(() => window.__ov.view.state.sliceDoc() === window.__ov.source);
 console.log("round-trip identical:", same);
+let failed = !same;
 
 // 2. Reading views, caret parked at the end so nothing near the top is revealed.
 await caretAtEnd(); await scrollTo(0); await settle();
@@ -69,5 +70,7 @@ const crlf = "# A\r\n\r\nb\r\n";
 await ov((text) => window.__ov.load(text), crlf);
 const crlfSame = await ov((text) => window.__ov.view.state.sliceDoc() === text, crlf);
 console.log("crlf round-trip identical:", crlfSame);
+failed ||= !crlfSame;
 
 await browser.close();
+process.exit(failed ? 1 : 0);
