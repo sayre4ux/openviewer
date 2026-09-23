@@ -1,4 +1,5 @@
 import registry from "./commands.json";
+import reservedJson from "./reserved.json";
 
 // Shortcuts are stored in one canonical form, shared with the Rust menu builder:
 // modifiers in the order Cmd, Ctrl, Alt, Shift, then the key, joined by "+", e.g. "Cmd+Shift+L",
@@ -27,21 +28,10 @@ export function effectiveKeys(overrides: Overrides): Record<string, string> {
   return Object.fromEntries(commandDefs.map((c) => [c.id, effectiveKey(c.id, overrides)]));
 }
 
-// macOS and the app's own Preferences shortcut; these can't be reassigned.
-export const reserved: Record<string, string> = {
-  "Cmd+Q": "Quit",
-  "Cmd+H": "Hide OpenViewer",
-  "Cmd+Alt+H": "Hide Others",
-  "Cmd+M": "Minimize",
-  "Cmd+C": "Copy",
-  "Cmd+V": "Paste",
-  "Cmd+X": "Cut",
-  "Cmd+A": "Select All",
-  "Cmd+,": "Preferences",
-  "Cmd+Tab": "App Switcher",
-  "Cmd+Space": "Spotlight",
-  "Cmd+`": "Cycle Windows",
-};
+// macOS and the app's own shortcuts; these can't be reassigned. Shared with the Rust side.
+export const reserved = reservedJson as Record<string, string>;
+
+const fkey = /^F(?:[1-9]|1\d|2[0-4])$/; // F1–F24, the range macOS menus accept
 
 const codeKeys: Record<string, string> = {
   Slash: "/", Comma: ",", Period: ".", Semicolon: ";", Quote: "'", BracketLeft: "[", BracketRight: "]",
@@ -58,7 +48,7 @@ export function fromEvent(e: KeyboardEvent): string | null {
   const digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
   if (letter) key = letter[1];
   else if (digit) key = digit[1];
-  else if (/^F\d{1,2}$/.test(e.code)) key = e.code;
+  else if (fkey.test(e.code)) key = e.code;
   else key = codeKeys[e.code] ?? null;
   if (!key) return null;
   const mods = [e.metaKey && "Cmd", e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift"].filter(Boolean);
@@ -69,7 +59,7 @@ export function fromEvent(e: KeyboardEvent): string | null {
 export function isUsable(shortcut: string) {
   const parts = shortcut.split("+");
   const key = parts[parts.length - 1];
-  return /^F\d{1,2}$/.test(key) || parts.includes("Cmd") || parts.includes("Ctrl");
+  return fkey.test(key) || parts.includes("Cmd") || parts.includes("Ctrl");
 }
 
 const cmNames: Record<string, string> = { Up: "ArrowUp", Down: "ArrowDown", Left: "ArrowLeft", Right: "ArrowRight" };
@@ -99,14 +89,26 @@ export function display(shortcut: string): string {
 }
 
 // Keep only entries for known commands with well-formed values ("" is allowed: no shortcut).
+// An override that repeats a shortcut an earlier command already has is dropped, as in Rust.
 export function sanitize(raw: unknown): Overrides {
   const out: Overrides = {};
   if (!raw || typeof raw !== "object") return out;
-  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+  const given = raw as Record<string, unknown>;
+  for (const [id, value] of Object.entries(given)) {
     if (!commandIds.has(id) || typeof value !== "string") continue;
     if (value === "" || (/^(?:(?:Cmd|Ctrl|Alt|Shift)\+)*[^+]+$/.test(value) && isUsable(value) && !reserved[value])) {
       out[id] = value;
     }
+  }
+  const seen = new Set<string>();
+  for (const def of commandDefs) {
+    let key = effectiveKey(def.id, out);
+    if (key && seen.has(key)) {
+      if (def.id in out) delete out[def.id];
+      key = effectiveKey(def.id, out);
+      if (key && seen.has(key)) out[def.id] = "";
+    }
+    if (out[def.id] !== "" && key) seen.add(key);
   }
   return out;
 }

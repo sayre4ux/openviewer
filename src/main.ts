@@ -11,12 +11,18 @@ import { codeHighlight } from "./editor/codeHighlight";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
 import { livePreview } from "./editor/livePreview";
-import { formatInCell, insertTable, setCellFormatKeys } from "./editor/tables";
+import { formatInCell, insertTable, setCellKeys } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import sample from "./sample.md?raw";
 import { createKeybindingStore } from "./shared/keybindings";
 import { commandDefs, effectiveKeys, type Overrides, toCodeMirror } from "./shared/keys";
 import "./theme/newsprint.css";
+
+// CodeMirror's standard keys, minus any on a key the command list uses by default: when you move
+// a command off its default key, the key goes quiet instead of reaching a hidden CodeMirror
+// command (⌘/ toggle comment, ⌘I select parent syntax, ...).
+const defaultShortcutKeys = new Set(commandDefs.map((d) => toCodeMirror(d.key)).filter(Boolean));
+const baseKeymap = defaultKeymap.filter((b) => !defaultShortcutKeys.has(b.mac ?? b.key ?? ""));
 
 const preview = new Compartment();
 const focusComp = new Compartment();
@@ -69,7 +75,7 @@ function extensionsForDocument(): Extension[] {
     keymap.of([
       ...typoraKeymap,
       indentWithTab,
-      ...defaultKeymap,
+      ...baseKeymap,
     ]),
     EditorView.updateListener.of((u) => {
       documentChanged();
@@ -118,7 +124,7 @@ function shortcutKeymap() {
 function applyShortcuts(next: Overrides) {
   overrides = next;
   const keys = effectiveKeys(overrides);
-  setCellFormatKeys({ bold: keys.bold, italic: keys.italic, code: keys.code });
+  setCellKeys(keys);
   view.dispatch({ effects: shortcutsComp.reconfigure(shortcutKeymap()) });
 }
 
@@ -173,6 +179,8 @@ const commands: Record<string, () => void> = {
       () => {
         const marker = { bold: "**", italic: "*", code: "`" }[id];
         if (marker && formatInCell(marker)) return;
+        // Headings don't apply inside a table cell, and the editor selection is elsewhere then.
+        if (document.activeElement?.classList.contains("cm-md-cell")) return;
         command(view);
       },
     ]),
@@ -193,8 +201,8 @@ const doc: ShellDocument = {
 };
 
 const keybindings = createKeybindingStore();
-void keybindings.load().then(applyShortcuts);
-keybindings.onChange(applyShortcuts);
+void keybindings.load().then((s) => applyShortcuts(s.overrides));
+keybindings.onChange((s) => applyShortcuts(s.overrides));
 
 outline.attach(view);
 wordCount.attach(view);

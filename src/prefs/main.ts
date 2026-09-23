@@ -9,6 +9,16 @@ const store = createKeybindingStore();
 const list = document.getElementById("list")!;
 const search = document.getElementById("search") as HTMLInputElement;
 const native = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+const problemsEl = document.getElementById("problems")!;
+
+// Problems with a hand-edited keybindings.json. The listed settings are the last good ones.
+function showProblems(problems: string[]) {
+  problemsEl.hidden = problems.length === 0;
+  const broken = problems.some((p) => p.includes("valid JSON") || p.includes("can't be read"));
+  problemsEl.innerHTML =
+    `<ul>${problems.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>` +
+    (broken ? `<p>Shown below are the last working shortcuts. Changing one here rewrites the file and keeps a copy of it as keybindings.json.bak.</p>` : "");
+}
 
 let overrides: Overrides = {};
 let recording: string | null = null; // command id being recorded
@@ -184,7 +194,8 @@ resetWrap.addEventListener("click", async (e) => {
 });
 
 store.onChange((next) => {
-  overrides = next;
+  overrides = next.overrides;
+  showProblems(next.problems);
   if (!recording) render();
 });
 
@@ -196,6 +207,8 @@ if (native) {
     await win.listen<string>("menu", ({ payload }) => {
       if (payload === "close-window") void win.close();
       if (payload === "quit") void emit("quit-request"); // every window closes or asks to save
+      // The menu takes ⌘Z/⇧⌘Z before the search field sees them.
+      if (payload === "undo" || payload === "redo") document.execCommand(payload);
     });
     await listen("quit-request", () => void win.close());
     // Leaving the window mid-recording must not leave the menu without shortcuts.
@@ -206,7 +219,8 @@ if (native) {
 }
 
 void store.load().then((loaded) => {
-  overrides = loaded;
+  overrides = loaded.overrides;
+  showProblems(loaded.problems);
   render();
 });
 render();

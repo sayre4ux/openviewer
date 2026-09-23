@@ -18,13 +18,17 @@ type Align = "left" | "center" | "right" | null;
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
-// Shortcut → marker for formatting inside cells, kept in step with the customizable shortcuts.
+// Shortcuts that cells handle themselves, kept in step with the customizable shortcuts.
 let cellFormatKeys: Record<string, string> = { "Cmd+B": "**", "Cmd+I": "*", "Cmd+E": "`" };
-export function setCellFormatKeys(keys: { bold: string; italic: string; code: string }) {
+let cellHistoryKeys: Record<string, "undo" | "redo"> = { "Cmd+Z": "undo", "Cmd+Shift+Z": "redo" };
+export function setCellKeys(keys: Record<string, string>) {
   cellFormatKeys = {};
   if (keys.bold) cellFormatKeys[keys.bold] = "**";
   if (keys.italic) cellFormatKeys[keys.italic] = "*";
   if (keys.code) cellFormatKeys[keys.code] = "`";
+  cellHistoryKeys = {};
+  if (keys.undo) cellHistoryKeys[keys.undo] = "undo";
+  if (keys.redo) cellHistoryKeys[keys.redo] = "redo";
 }
 
 // A menu command (the menu takes the key before the page sees it) aimed at a focused cell.
@@ -562,8 +566,8 @@ class TableWidget extends WidgetType {
       this.toggleFormat(view, wrap, cell, format);
     } else if (mod && e.key.toLowerCase() === "a") {
       selectText(cell, 0, len);
-    } else if (mod && e.key.toLowerCase() === "z") {
-      if (e.shiftKey) redo(view);
+    } else if (pressed && cellHistoryKeys[pressed]) {
+      if (cellHistoryKeys[pressed] === "redo") redo(view);
       else undo(view);
     } else if (mod && e.key === "Enter") {
       this.structural(view, wrap, "row-below", r, c);

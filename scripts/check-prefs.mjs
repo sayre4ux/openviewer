@@ -83,6 +83,38 @@ await page.keyboard.press("Meta+Shift+I"); await settle();
 const live = await page.evaluate(() => window.__ov.view.state.doc.line(1).text);
 check("live update from Preferences", live === "*plain*", live);
 
+// --- Regressions from the review ---
+// A freed default key goes quiet instead of reaching a hidden CodeMirror command (⌘/ = toggle comment).
+await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ "source-mode": "Cmd+Shift+M", undo: "Cmd+Shift+U" })));
+await page.reload(); await page.waitForSelector(".cm-content"); await settle(300);
+await page.evaluate(() => { window.__ov.load("line\n\n| A |\n|---|\n| cell |\n"); const v = window.__ov.view; v.dispatch({ selection: { anchor: 2 } }); v.focus(); });
+await settle();
+await page.keyboard.press("Meta+Slash"); await settle();
+const quiet = await page.evaluate(() => window.__ov.view.state.doc.line(1).text);
+check("freed key does nothing", quiet === "line" && !(await page.evaluate(() => window.__ov.modes.source)), quiet);
+
+// Table cells follow a rebound Undo.
+await page.locator('.cm-md-cell[data-row="1"]').click(); await page.keyboard.press("Meta+ArrowRight"); await page.keyboard.type("X"); await settle();
+await page.keyboard.press("Meta+Shift+U"); await settle();
+const undone = await page.evaluate(() => window.__ov.view.state.doc.line(5).text);
+check("cell uses rebound undo", undone === "| cell |", undone);
+
+// Heading commands do nothing while a table cell has focus.
+await page.locator('.cm-md-cell[data-row="1"]').click();
+await page.evaluate(() => window.__ov.commands["heading-1"]()); await settle();
+const unchanged = await page.evaluate(() => window.__ov.view.state.sliceDoc());
+check("heading ignored in a cell", unchanged === "line\n\n| A |\n|---|\n| cell |\n", JSON.stringify(unchanged));
+
+// Preferences: duplicates in saved settings are resolved, and broken settings are reported.
+await page.setViewportSize({ width: 640, height: 620 });
+await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ bold: "Cmd+K", italic: "Cmd+K" })));
+await page.goto(base + "preferences.html"); await page.waitForSelector(".prefs-row"); await settle();
+check("duplicate override dropped", (await row("Italic").locator("kbd").textContent()) === "⌘I" && (await row("Bold").locator("kbd").textContent()) === "⌘K");
+await page.evaluate(() => localStorage.setItem("openviewer.keybindings", "{ bad json,"));
+await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+check("broken settings reported", await page.isVisible("#problems") && (await page.textContent("#problems")).includes("valid JSON"));
+await page.screenshot({ path: `${out}/p3-problems.png` });
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);

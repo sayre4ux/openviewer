@@ -95,6 +95,25 @@ body {
   border-color: var(--accent);
 }
 
+.prefs-problems {
+  margin: 0 28px 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #f7ecd9;
+  color: var(--warn);
+  font: 13px var(--sans);
+}
+.prefs-problems[hidden] {
+  display: none;
+}
+.prefs-problems ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.prefs-problems p {
+  margin: 6px 0 0;
+}
+
 .prefs-list {
   flex: 1;
   overflow-y: auto;

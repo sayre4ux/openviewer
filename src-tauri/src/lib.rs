@@ -10,6 +10,11 @@ static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 struct Startup { ready: AtomicBool, pending: Mutex<Vec<String>> }
 
+// The document window that was focused last, so menu commands chosen while Preferences is in
+// front still reach a document.
+#[derive(Default)]
+struct LastDocument(Mutex<Option<String>>);
+
 #[tauri::command]
 fn frontend_ready(startup: tauri::State<Startup>) -> Vec<String> {
   startup.ready.store(true, Ordering::SeqCst);
@@ -93,6 +98,8 @@ fn sync_view_menu<R: Runtime>(app: tauri::AppHandle<R>, window: tauri::Window<R>
     ("typewriter-mode", checks.typewriter),
     ("word-count", checks.word_count),
   ];
+  // Remembered so a menu rebuild (new shortcuts) keeps the checkmarks.
+  *app.state::<menu::Keybindings>().checks.lock().unwrap() = wanted.iter().map(|(id, on)| (id.to_string(), *on)).collect();
   for entry in menu.items().map_err(|e| e.to_string())? {
     let Some(submenu) = entry.as_submenu() else { continue };
     for (id, on) in wanted {
@@ -109,6 +116,7 @@ pub fn run() {
   tauri::Builder::default()
     .manage(Startup::default())
     .manage(menu::Keybindings::default())
+    .manage(LastDocument::default())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_opener::init())
@@ -124,12 +132,29 @@ pub fn run() {
         menu::open_preferences(app);
         return;
       }
-      if let Some(window) = app.webview_windows().values().find(|w| w.is_focused().unwrap_or(false)) {
-        let _ = app.emit_to(window.label(), "menu", event.id().as_ref());
+      let id = event.id().as_ref();
+      let Some(focused) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false)) else { return };
+      // File commands chosen while Preferences is in front go to the last document window;
+      // Preferences handles everything else itself (Close, Quit, Undo in its search field).
+      let for_document = matches!(id, "new" | "open" | "save" | "save-as");
+      let target = if focused.label() == "preferences" && for_document {
+        app.state::<LastDocument>().0.lock().unwrap().clone().filter(|label| app.get_webview_window(label).is_some())
+      } else {
+        Some(focused.label().to_string())
+      };
+      match target {
+        Some(label) => { let _ = app.emit_to(label.as_str(), "menu", id); }
+        None if id == "new" => { let _ = create_document_window(app.clone(), None); }
+        None => {}
       }
     })
     .on_window_event(|window, event| match event {
-      tauri::WindowEvent::Focused(true) => menu::reload_if_changed(window.app_handle()),
+      tauri::WindowEvent::Focused(true) => {
+        if window.label() != "preferences" {
+          *window.app_handle().state::<LastDocument>().0.lock().unwrap() = Some(window.label().to_string());
+        }
+        menu::reload_if_changed(window.app_handle());
+      }
       // Preferences closed mid-recording: bring the menu's shortcuts back.
       tauri::WindowEvent::Destroyed if window.label() == "preferences" => {
         let _ = menu::suspend_shortcuts(window.app_handle().clone(), false);

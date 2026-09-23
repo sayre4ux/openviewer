@@ -4,10 +4,16 @@ import { type Overrides, sanitize } from "./keys";
 // written by Rust, which also rebuilds the menu and tells every window. In a plain browser (tests):
 // localStorage.
 
+// `problems`: what's wrong with a hand-edited keybindings.json (bad JSON, dropped entries).
+export interface KeybindingState {
+  overrides: Overrides;
+  problems: string[];
+}
+
 export interface KeybindingStore {
-  load(): Promise<Overrides>;
+  load(): Promise<KeybindingState>;
   save(overrides: Overrides): Promise<void>;
-  onChange(callback: (overrides: Overrides) => void): void;
+  onChange(callback: (state: KeybindingState) => void): void;
   openFile(): Promise<void>;
   // Recording a shortcut: turn off menu shortcuts so the key press reaches the page.
   suspend(on: boolean): Promise<void>;
@@ -17,12 +23,12 @@ const native = () => Boolean((window as unknown as { __TAURI_INTERNALS__?: unkno
 const storageKey = "openviewer.keybindings";
 
 function browserStore(): KeybindingStore {
-  const listeners: ((o: Overrides) => void)[] = [];
-  const read = () => {
+  const listeners: ((s: KeybindingState) => void)[] = [];
+  const read = (): KeybindingState => {
     try {
-      return sanitize(JSON.parse(localStorage.getItem(storageKey) ?? "{}"));
+      return { overrides: sanitize(JSON.parse(localStorage.getItem(storageKey) ?? "{}")), problems: [] };
     } catch {
-      return {};
+      return { overrides: {}, problems: ["Saved shortcuts aren't valid JSON"] };
     }
   };
   window.addEventListener("storage", (e) => {
@@ -36,7 +42,7 @@ function browserStore(): KeybindingStore {
       } catch {
         // Storage unavailable: the change applies until reload.
       }
-      listeners.forEach((cb) => cb(sanitize(overrides)));
+      listeners.forEach((cb) => cb({ overrides: sanitize(overrides), problems: [] }));
     },
     onChange: (cb) => void listeners.push(cb),
     openFile: async () => undefined,
@@ -44,14 +50,16 @@ function browserStore(): KeybindingStore {
   };
 }
 
+const checked = (s: KeybindingState): KeybindingState => ({ overrides: sanitize(s.overrides), problems: s.problems ?? [] });
+
 function nativeStore(): KeybindingStore {
   const core = import("@tauri-apps/api/core");
   const events = import("@tauri-apps/api/event");
   return {
-    load: async () => sanitize(await (await core).invoke("get_keybindings")),
+    load: async () => checked(await (await core).invoke<KeybindingState>("get_keybindings")),
     save: async (overrides) => (await core).invoke("set_keybindings", { overrides: sanitize(overrides) }),
     onChange: (cb) => {
-      void events.then(({ listen }) => listen<Overrides>("keybindings-changed", (e) => cb(sanitize(e.payload))));
+      void events.then(({ listen }) => listen<KeybindingState>("keybindings-changed", (e) => cb(checked(e.payload))));
     },
     openFile: async () => (await core).invoke("open_keybindings_file"),
     suspend: async (on) => (await core).invoke("suspend_shortcuts", { suspended: on }),
