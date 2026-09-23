@@ -37,20 +37,21 @@ export async function resolveClose(
   }
 }
 
+// A local image's absolute path, normalized. Not a security check: Rust (`resolve_image_path`)
+// decides which files a document may show.
 export function localImageCandidate(source: string, documentPath: string): string | null {
-  const folder = documentPath.replace(/\/[^/]*$/, "");
-  const root = folder.split("/").filter(Boolean);
-  const parts = source.replace(/\\/g, "/").startsWith("/") ? [] : [...root];
-  for (const part of source.replace(/\\/g, "/").split("/")) {
+  const normalized = source.replace(/\\/g, "/");
+  const parts = normalized.startsWith("/") ? [] : documentPath.replace(/\/[^/]*$/, "").split("/").filter(Boolean);
+  for (const part of normalized.split("/")) {
     if (!part || part === ".") continue;
     if (part === "..") {
-      if (parts.length <= root.length) return null;
+      if (parts.length === 0) return null;
       parts.pop();
     } else {
       parts.push(part);
     }
   }
-  return root.every((part, i) => parts[i] === part) && parts.length > root.length ? `/${parts.join("/")}` : null;
+  return parts.length ? `/${parts.join("/")}` : null;
 }
 
 // View-menu checkmarks, mirrored from the focused window's modes.
@@ -100,7 +101,13 @@ export async function startShell(
     }
   };
   const saveAs = async (): Promise<boolean> => {
-    const target = await call<string | null>("save_dialog", { defaultPath: path || "Untitled.md" });
+    let target: string | null;
+    try {
+      target = await call<string | null>("save_dialog", { defaultPath: path || "Untitled.md" });
+    } catch (error) {
+      await message(String(error), { title: "Couldn’t save document", kind: "error" });
+      return false;
+    }
     return target ? saveTo(target) : false;
   };
   const save = async (): Promise<boolean> => path ? saveTo(path) : saveAs();
@@ -130,7 +137,13 @@ export async function startShell(
     else await call("create_document_window", { path: target });
   };
   const openDialog = async () => {
-    const selected = await call<string | null>("open_dialog");
+    let selected: string | null;
+    try {
+      selected = await call<string | null>("open_dialog");
+    } catch (error) {
+      await message(String(error), { title: "Couldn’t open document", kind: "error" });
+      return;
+    }
     if (typeof selected === "string") await openPath(selected);
   };
   const askToClose = (): Promise<boolean> => resolveClose(

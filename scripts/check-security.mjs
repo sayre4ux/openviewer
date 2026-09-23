@@ -89,12 +89,15 @@ try {
       outsideBackslash: candidate("..\\secret.png", doc),
     };
   });
-  check("local image resolver stays in document folder",
+  // The prefilter only normalizes; the folder/repository boundary is enforced in Rust (cargo tests).
+  check("local image paths are normalized",
     localPaths.relative === "/Users/example/Notes/images/pic.png" &&
     localPaths.insideAbsolute === "/Users/example/Notes/pic.png" &&
     localPaths.insideDots === "/Users/example/Notes/pic.png" &&
-    localPaths.outsideRelative === null && localPaths.outsideThenBack === null &&
-    localPaths.outsideAbsolute === null && localPaths.outsideBackslash === null,
+    localPaths.outsideRelative === "/Users/example/secret.png" &&
+    localPaths.outsideThenBack === "/Users/example/Notes/pic.png" &&
+    localPaths.outsideAbsolute === "/Users/example/secret.png" &&
+    localPaths.outsideBackslash === "/Users/example/secret.png",
     JSON.stringify(localPaths));
 
   const markdown = [
