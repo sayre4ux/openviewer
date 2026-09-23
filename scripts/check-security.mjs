@@ -76,6 +76,27 @@ try {
     !hosts.loop && !hosts.lan && !hosts.js && hosts.https && hosts.rel && !hosts.v6 && !hosts.mapped && !hosts.local && !hosts.ten && !hosts.link && !hosts.zero && !hosts.ula && !hosts.ll6 && !hosts.decimal && hosts.data && !hosts.html && hosts.abs && !hosts.proto,
     JSON.stringify(hosts));
 
+  const localPaths = await page.evaluate(() => {
+    const candidate = window.__ov.localImageCandidate;
+    const doc = "/Users/example/Notes/page.md";
+    return {
+      relative: candidate("images/pic.png", doc),
+      insideAbsolute: candidate("/Users/example/Notes/pic.png", doc),
+      insideDots: candidate("images/../pic.png", doc),
+      outsideRelative: candidate("../secret.png", doc),
+      outsideThenBack: candidate("../Notes/pic.png", doc),
+      outsideAbsolute: candidate("/Users/example/secret.png", doc),
+      outsideBackslash: candidate("..\\secret.png", doc),
+    };
+  });
+  check("local image resolver stays in document folder",
+    localPaths.relative === "/Users/example/Notes/images/pic.png" &&
+    localPaths.insideAbsolute === "/Users/example/Notes/pic.png" &&
+    localPaths.insideDots === "/Users/example/Notes/pic.png" &&
+    localPaths.outsideRelative === null && localPaths.outsideThenBack === null &&
+    localPaths.outsideAbsolute === null && localPaths.outsideBackslash === null,
+    JSON.stringify(localPaths));
+
   const markdown = [
     "Images",
     "",

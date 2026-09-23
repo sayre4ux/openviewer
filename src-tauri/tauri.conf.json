@@ -35,9 +35,7 @@
       },
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": []
       },
       "devCsp": null
     }

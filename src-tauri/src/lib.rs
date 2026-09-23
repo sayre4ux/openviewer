@@ -1,12 +1,14 @@
 use std::{
+  collections::HashSet,
   ffi::CString,
   fs::{self, OpenOptions},
   io::{Read, Write},
   os::unix::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}},
-  path::Path,
+  path::{Path, PathBuf},
   sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex},
 };
 use tauri::{webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
+use tauri_plugin_dialog::DialogExt;
 
 mod menu;
 
@@ -22,6 +24,85 @@ struct Startup { ready: AtomicBool, pending: Mutex<Vec<String>> }
 #[derive(Default)]
 struct LastDocument(Mutex<Option<String>>);
 
+#[derive(Default)]
+struct AuthorizedDocuments(Mutex<HashSet<PathBuf>>);
+
+fn canonical_document(path: &Path, allow_new: bool) -> Result<PathBuf, String> {
+  if !path.is_absolute() { return Err("Document path must be absolute".into()); }
+  let canonical = match fs::canonicalize(path) {
+    Ok(path) => path,
+    Err(e) if allow_new && e.kind() == std::io::ErrorKind::NotFound => {
+      if fs::symlink_metadata(path).is_ok() { return Err(e.to_string()); }
+      let parent = path.parent().ok_or_else(|| "Invalid file path".to_string())?;
+      let name = path.file_name().ok_or_else(|| "Invalid file path".to_string())?;
+      fs::canonicalize(parent).map_err(|e| e.to_string())?.join(name)
+    }
+    Err(e) => return Err(e.to_string()),
+  };
+  if canonical.exists() && !canonical.is_file() {
+    return Err(format!("{} is not a regular file", path_name(path)));
+  }
+  Ok(canonical)
+}
+
+impl AuthorizedDocuments {
+  fn authorize(&self, path: &Path, allow_new: bool) -> Result<PathBuf, String> {
+    let canonical = canonical_document(path, allow_new)?;
+    self.0.lock().unwrap().insert(canonical.clone());
+    Ok(canonical)
+  }
+
+  fn require(&self, path: &Path, allow_new: bool) -> Result<PathBuf, String> {
+    let canonical = canonical_document(path, allow_new)?;
+    if !self.0.lock().unwrap().contains(&canonical) {
+      return Err("Document path was not chosen by the user".into());
+    }
+    Ok(canonical)
+  }
+}
+
+fn authorize_document<R: Runtime>(app: &tauri::AppHandle<R>, path: &Path, allow_new: bool) -> Result<String, String> {
+  let canonical = canonical_document(path, allow_new)?;
+  let display = canonical.to_str().ok_or_else(|| "Document path is not valid UTF-8".to_string())?.to_owned();
+  let dir = canonical.parent().ok_or_else(|| "Invalid file path".to_string())?;
+  app.asset_protocol_scope().allow_directory(dir, true).map_err(|e| e.to_string())?;
+  app.state::<AuthorizedDocuments>().authorize(&canonical, allow_new)?;
+  Ok(display)
+}
+
+fn scoped_image_path(document: &Path, source: &Path) -> Option<PathBuf> {
+  let canonical_document = fs::canonicalize(document).ok()?;
+  let folder = canonical_document.parent()?;
+  let candidate = if source.is_absolute() { source.to_path_buf() } else { folder.join(source) };
+  let image = fs::canonicalize(candidate).ok()?;
+  (image.starts_with(folder) && image.is_file()).then_some(image)
+}
+
+#[tauri::command]
+fn resolve_image_path(document_path: String, source: String, authorized: tauri::State<AuthorizedDocuments>) -> Option<String> {
+  let document = authorized.require(Path::new(&document_path), false).ok()?;
+  scoped_image_path(&document, Path::new(&source))?.to_str().map(str::to_owned)
+}
+
+// Async so Tauri runs these off the main thread: a blocking dialog on the main thread hangs macOS.
+#[tauri::command]
+async fn open_dialog<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Option<String>, String> {
+  let selected = app.dialog().file().add_filter("Markdown and text", &["md", "markdown", "mdown", "txt"])
+    .blocking_pick_file();
+  selected.map(|p| authorize_document(&app, &p.into_path().map_err(|e| e.to_string())?, false)).transpose()
+}
+
+#[tauri::command]
+async fn save_dialog<R: Runtime>(app: tauri::AppHandle<R>, default_path: String) -> Result<Option<String>, String> {
+  let default = Path::new(&default_path);
+  let name = default.file_name().and_then(|s| s.to_str()).unwrap_or("Untitled.md");
+  let mut dialog = app.dialog().file().add_filter("Markdown and text", &["md", "markdown", "mdown", "txt"])
+    .set_file_name(name);
+  if let Some(dir) = default.parent().filter(|p| !p.as_os_str().is_empty() && p.is_dir()) { dialog = dialog.set_directory(dir); }
+  let selected = dialog.blocking_save_file();
+  selected.map(|p| authorize_document(&app, &p.into_path().map_err(|e| e.to_string())?, true)).transpose()
+}
+
 #[tauri::command]
 fn frontend_ready(startup: tauri::State<Startup>) -> Vec<String> {
   startup.ready.store(true, Ordering::SeqCst);
@@ -29,7 +110,7 @@ fn frontend_ready(startup: tauri::State<Startup>) -> Vec<String> {
 }
 
 #[derive(serde::Serialize, Debug)]
-struct Document { text: String, bom: bool }
+struct Document { text: String, bom: bool, path: String }
 
 // A document is a text file. Anything larger is refused before it is read into memory.
 const OPEN_LIMIT: u64 = 64 * 1024 * 1024;
@@ -62,8 +143,16 @@ fn copy_metadata(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn read_document(path: String) -> Result<Document, String> {
-  let path = Path::new(&path);
+fn read_document(path: String, authorized: tauri::State<AuthorizedDocuments>) -> Result<Document, String> {
+  read_authorized_document(&authorized, Path::new(&path))
+}
+
+fn read_authorized_document(authorized: &AuthorizedDocuments, path: &Path) -> Result<Document, String> {
+  let target = authorized.require(path, false)?;
+  read_document_file(&target)
+}
+
+fn read_document_file(path: &Path) -> Result<Document, String> {
   // O_NONBLOCK: opening a FIFO would otherwise wait forever for a writer.
   let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path).map_err(|e| e.to_string())?;
   let meta = file.metadata().map_err(|e| e.to_string())?;
@@ -77,19 +166,26 @@ fn read_document(path: String) -> Result<Document, String> {
   let bom = bytes.starts_with(&[0xef, 0xbb, 0xbf]);
   if bom { bytes.drain(..3); }
   let text = String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8".to_string())?;
-  Ok(Document { text, bom })
+  Ok(Document { text, bom, path: path.to_string_lossy().into_owned() })
 }
 
 #[tauri::command]
-fn write_document(path: String, text: String, bom: bool) -> Result<(), String> {
-  let requested = Path::new(&path);
-  // Renaming onto a symlink replaces the link with a regular file. Resolve first and
-  // replace the file the link points at, so the link itself stays a link.
-  let target = match fs::symlink_metadata(requested) {
-    Ok(_) => fs::canonicalize(requested).map_err(|e| e.to_string())?,
-    Err(e) if e.kind() == std::io::ErrorKind::NotFound => requested.to_path_buf(),
-    Err(e) => return Err(e.to_string()),
-  };
+fn write_document(path: String, text: String, bom: bool, authorized: tauri::State<AuthorizedDocuments>) -> Result<(), String> {
+  write_authorized_document(&authorized, Path::new(&path), text, bom)
+}
+
+fn write_authorized_document(authorized: &AuthorizedDocuments, path: &Path, text: String, bom: bool) -> Result<(), String> {
+  let target = authorized.require(path, true)?;
+  write_document_file(&target, text, bom)
+}
+
+pub(crate) fn write_document_trusted(path: &Path, text: String, bom: bool) -> Result<(), String> {
+  let target = canonical_document(path, true)?;
+  write_document_file(&target, text, bom)
+}
+
+fn write_document_file(target: &Path, text: String, bom: bool) -> Result<(), String> {
+  // The authorized target is canonical, so replacing it keeps a selected symlink intact.
   let parent = target.parent().unwrap_or_else(|| Path::new("."));
   let name = target.file_name().ok_or_else(|| "Invalid file path".to_string())?.to_string_lossy();
   let existed = fs::metadata(&target).ok();
@@ -125,7 +221,10 @@ fn write_document(path: String, text: String, bom: bool) -> Result<(), String> {
 #[tauri::command]
 fn create_document_window<R: Runtime>(app: tauri::AppHandle<R>, path: Option<String>) -> Result<(), String> {
   let url = match path {
-    Some(path) => format!("index.html?path={}", encode_query(&path)),
+    Some(path) => {
+      let target = app.state::<AuthorizedDocuments>().require(Path::new(&path), false)?;
+      format!("index.html?path={}", encode_query(&target.to_string_lossy()))
+    }
     None => "index.html".to_string(),
   };
   open_window(&app, url)
@@ -181,6 +280,7 @@ pub fn run() {
     .manage(Startup::default())
     .manage(menu::Keybindings::default())
     .manage(LastDocument::default())
+    .manage(AuthorizedDocuments::default())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_opener::init())
     .setup(|app| {
@@ -188,6 +288,7 @@ pub fn run() {
         app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
       }
       menu::load(app.handle())?;
+      app.asset_protocol_scope().forbid_directory("/dev", true)?;
       Ok(())
     })
     .on_menu_event(|app, event| {
@@ -223,11 +324,21 @@ pub fn run() {
       tauri::WindowEvent::Destroyed if window.label() == "preferences" => {
         let _ = menu::suspend_shortcuts(window.app_handle().clone(), false);
       }
+      tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) if window.label() != "preferences" => {
+        let allowed: Vec<_> = paths.iter().filter_map(|path| {
+          authorize_document(window.app_handle(), path, false).ok()?;
+          path.to_str().map(str::to_owned)
+        }).collect();
+        if !allowed.is_empty() { let _ = window.app_handle().emit_to(window.label(), "authorized-drop", allowed); }
+      }
       _ => {}
     })
     .invoke_handler(tauri::generate_handler![
       read_document,
       write_document,
+      open_dialog,
+      save_dialog,
+      resolve_image_path,
       create_document_window,
       frontend_ready,
       sync_view_menu,
@@ -243,12 +354,14 @@ pub fn run() {
       if let tauri::RunEvent::Opened { urls } = event {
         for url in urls {
           if let Ok(path) = url.to_file_path() {
-            let path = path.to_string_lossy().into_owned();
+            let Ok(path) = authorize_document(app, &path, false) else { continue };
             let startup = app.state::<Startup>();
             if !startup.ready.load(Ordering::SeqCst) {
               startup.pending.lock().unwrap().push(path);
-            } else if let Some(window) = app.webview_windows().values().find(|w| w.is_focused().unwrap_or(false)) {
+            } else if let Some(window) = app.webview_windows().values().find(|w| w.label() != "preferences" && w.is_focused().unwrap_or(false)) {
               let _ = app.emit_to(window.label(), "open-path", path);
+            } else if let Some(label) = app.state::<LastDocument>().0.lock().unwrap().clone().filter(|label| app.get_webview_window(label).is_some()) {
+              let _ = app.emit_to(label, "open-path", path);
             } else {
               let _ = create_document_window(app.clone(), Some(path));
             }
@@ -266,23 +379,23 @@ mod tests {
   }
   #[test]
   fn bom_round_trip() {
-    let p = path("bom"); write_document(p.to_string_lossy().into_owned(), "hello".into(), true).unwrap();
+    let p = path("bom"); write_document_trusted(&p, "hello".into(), true).unwrap();
     assert_eq!(fs::read(&p).unwrap(), b"\xef\xbb\xbfhello");
-    assert_eq!(read_document(p.to_string_lossy().into_owned()).unwrap().text, "hello");
+    assert_eq!(read_document_file(&p).unwrap().text, "hello");
     let _ = fs::remove_file(p);
   }
   #[test]
   fn crlf_bytes_are_untouched() {
     let p = path("crlf"); fs::write(&p, b"a\r\nb\r\n").unwrap();
-    let doc = read_document(p.to_string_lossy().into_owned()).unwrap();
-    write_document(p.to_string_lossy().into_owned(), doc.text, doc.bom).unwrap();
+    let doc = read_document_file(&p).unwrap();
+    write_document_trusted(&p, doc.text, doc.bom).unwrap();
     assert_eq!(fs::read(&p).unwrap(), b"a\r\nb\r\n");
     let _ = fs::remove_file(p);
   }
   #[test]
   fn atomic_write_replaces_existing_file() {
     let p = path("replace"); fs::write(&p, b"old").unwrap();
-    write_document(p.to_string_lossy().into_owned(), "new".into(), false).unwrap();
+    write_document_trusted(&p, "new".into(), false).unwrap();
     assert_eq!(fs::read(&p).unwrap(), b"new");
     let _ = fs::remove_file(p);
   }
@@ -294,7 +407,7 @@ mod tests {
     let link = dir.join("link.md");
     fs::write(&real, b"old").unwrap();
     std::os::unix::fs::symlink("real.md", &link).unwrap();
-    write_document(link.to_string_lossy().into_owned(), "new".into(), false).unwrap();
+    write_document_trusted(&link, "new".into(), false).unwrap();
     assert_eq!(fs::read(&real).unwrap(), b"new");
     assert_eq!(fs::read(&link).unwrap(), b"new");
     assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
@@ -314,7 +427,7 @@ mod tests {
     let c_path = c_path(&p).unwrap();
     let rc = unsafe { libc::setxattr(c_path.as_ptr(), name.as_ptr(), value.as_ptr().cast(), value.len(), 0, 0) };
     assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
-    write_document(p.to_string_lossy().into_owned(), "new".into(), false).unwrap();
+    write_document_trusted(&p, "new".into(), false).unwrap();
     assert_eq!(fs::read(&p).unwrap(), b"new");
     assert_eq!(fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o640);
     let mut buf = [0u8; 8];
@@ -327,7 +440,7 @@ mod tests {
   fn refuses_oversized_regular_file() {
     let p = path("big");
     fs::File::create(&p).unwrap().set_len(65 * 1024 * 1024).unwrap();
-    let err = read_document(p.to_string_lossy().into_owned()).unwrap_err();
+    let err = read_document_file(&p).unwrap_err();
     assert!(err.contains("too large to open"), "{err}");
     assert!(err.contains("65 MB"), "{err}");
     assert!(err.contains("64 MB"), "{err}");
@@ -336,7 +449,7 @@ mod tests {
   #[test]
   fn refuses_device_without_reading_it() {
     let started = std::time::Instant::now();
-    let err = read_document("/dev/zero".into()).unwrap_err();
+    let err = read_document_file(Path::new("/dev/zero")).unwrap_err();
     assert!(started.elapsed() < std::time::Duration::from_secs(2), "slow refusal: {err}");
     assert!(err.contains("not a regular file"), "{err}");
   }
@@ -344,8 +457,74 @@ mod tests {
   fn refuses_directory() {
     let dir = path("dir");
     fs::create_dir(&dir).unwrap();
-    let err = read_document(dir.to_string_lossy().into_owned()).unwrap_err();
+    let err = read_document_file(&dir).unwrap_err();
     assert!(err.to_lowercase().contains("directory"), "{err}");
     let _ = fs::remove_dir(dir);
+  }
+
+  #[test]
+  fn document_paths_require_user_authorization() {
+    let dir = path("authorized");
+    fs::create_dir(&dir).unwrap();
+    let chosen = dir.join("chosen.md");
+    let private = dir.join("private.md");
+    let link = dir.join("link.md");
+    fs::write(&chosen, "chosen").unwrap();
+    fs::write(&private, "private").unwrap();
+    std::os::unix::fs::symlink(&private, &link).unwrap();
+    let paths = AuthorizedDocuments::default();
+    assert!(read_authorized_document(&paths, &chosen).is_err());
+    assert!(write_authorized_document(&paths, &chosen, "bad".into(), false).is_err());
+    assert_eq!(fs::read_to_string(&chosen).unwrap(), "chosen");
+    paths.authorize(&chosen, false).unwrap();
+    assert_eq!(read_authorized_document(&paths, &chosen).unwrap().text, "chosen");
+    write_authorized_document(&paths, &chosen, "saved".into(), false).unwrap();
+    assert_eq!(fs::read_to_string(&chosen).unwrap(), "saved");
+    assert!(read_authorized_document(&paths, &link).is_err());
+    assert!(write_authorized_document(&paths, &link, "bad".into(), false).is_err());
+    assert_eq!(fs::read_to_string(&private).unwrap(), "private");
+    let new_file = dir.join("new.md");
+    paths.authorize(&new_file, true).unwrap();
+    write_authorized_document(&paths, &new_file, "new".into(), false).unwrap();
+    assert_eq!(read_authorized_document(&paths, &new_file).unwrap().text, "new");
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn images_stay_in_the_canonical_document_folder() {
+    let dir = path("images");
+    let folder = dir.join("document");
+    fs::create_dir_all(&folder).unwrap();
+    let doc = folder.join("page.md");
+    let local = folder.join("local.png");
+    let outside = dir.join("outside.png");
+    let link = folder.join("link.png");
+    fs::write(&doc, "").unwrap();
+    fs::write(&local, "local").unwrap();
+    fs::write(&outside, "outside").unwrap();
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let canonical_local = fs::canonicalize(&local).unwrap();
+    assert_eq!(scoped_image_path(&doc, Path::new("local.png")), Some(canonical_local.clone()));
+    assert_eq!(scoped_image_path(&doc, &local), Some(canonical_local));
+    assert_eq!(scoped_image_path(&doc, Path::new("../outside.png")), None);
+    assert_eq!(scoped_image_path(&doc, &outside), None);
+    assert_eq!(scoped_image_path(&doc, Path::new("link.png")), None);
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn preferences_capability_cannot_use_document_commands() {
+    let document: serde_json::Value = serde_json::from_str(include_str!("../capabilities/documents.json")).unwrap();
+    let preferences: serde_json::Value = serde_json::from_str(include_str!("../capabilities/preferences.json")).unwrap();
+    assert_eq!(document["windows"], serde_json::json!(["main", "document-*"]));
+    assert_eq!(preferences["windows"], serde_json::json!(["preferences"]));
+    let docs = document["permissions"].as_array().unwrap();
+    let prefs = preferences["permissions"].as_array().unwrap();
+    assert!(docs.contains(&serde_json::json!("core:window:allow-destroy")));
+    assert!(!prefs.contains(&serde_json::json!("core:window:allow-destroy")));
+    for permission in ["allow-read-document", "allow-write-document", "allow-create-document-window", "allow-open-dialog", "allow-save-dialog", "allow-resolve-image-path"] {
+      assert!(docs.contains(&serde_json::json!(permission)));
+      assert!(!prefs.contains(&serde_json::json!(permission)));
+    }
   }
 }

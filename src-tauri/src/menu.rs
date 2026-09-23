@@ -242,7 +242,7 @@ pub fn set_keybindings<R: Runtime>(app: AppHandle<R>, overrides: serde_json::Val
   }
   let sorted: std::collections::BTreeMap<_, _> = clean.iter().collect(); // stable order for diffs
   let text = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())? + "\n";
-  crate::write_document(path.to_string_lossy().into_owned(), text, false)?;
+  crate::write_document_trusted(&path, text, false)?;
   let k = app.state::<Keybindings>();
   *k.modified.lock().unwrap() = mtime(&path);
   *k.overrides.lock().unwrap() = clean;
@@ -257,7 +257,7 @@ pub fn open_keybindings_file<R: Runtime>(app: AppHandle<R>) -> Result<(), String
   let path = file_path(&app)?;
   if !path.exists() {
     if let Some(dir) = path.parent() { fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
-    crate::write_document(path.to_string_lossy().into_owned(), "{\n}\n".into(), false)?;
+    crate::write_document_trusted(&path, "{\n}\n".into(), false)?;
     *app.state::<Keybindings>().modified.lock().unwrap() = mtime(&path);
   }
   app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())

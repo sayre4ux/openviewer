@@ -56,7 +56,7 @@ cd src-tauri && cargo test
    every window). View checkmarks are synced from the focused window through `sync_view_menu`.
 6. **Security.** Never put document text into `innerHTML` without escaping (see `renderInline` in
    `tables.ts`). Keep the CSP in `tauri.conf.json` strict; `scripts/check-csp.mjs` must pass. Keep
-   `src-tauri/capabilities/default.json` to the permissions actually used.
+   `src-tauri/capabilities/documents.json` and `preferences.json` to the permissions actually used.
 
 ## Gotchas
 

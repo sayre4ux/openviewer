@@ -73,18 +73,29 @@ class TaskWidget extends WidgetType {
 }
 
 class ImageWidget extends WidgetType {
-  constructor(readonly src: string, readonly alt: string) {
+  constructor(readonly src: string, readonly alt: string, readonly resolverVersion: number) {
     super();
   }
   eq(other: ImageWidget) {
-    return other.src === this.src && other.alt === this.alt;
+    return other.src === this.src && other.alt === this.alt && other.resolverVersion === this.resolverVersion;
   }
   toDOM() {
-    const img = document.createElement("img");
-    img.className = "cm-md-image";
-    img.src = this.src;
-    img.alt = this.alt;
-    return img;
+    const image = (src: string) => {
+      const img = document.createElement("img");
+      img.className = "cm-md-image";
+      img.alt = this.alt;
+      img.addEventListener("error", () => img.replaceWith(blockedImageNode(this.alt)), { once: true });
+      img.src = src;
+      return img;
+    };
+    const resolved = resolveImage(this.src);
+    if (resolved instanceof Promise) {
+      const pending = document.createElement("span");
+      void resolved.then((src) => pending.replaceWith(src ? image(src) : blockedImageNode(this.alt)))
+        .catch(() => pending.replaceWith(blockedImageNode(this.alt)));
+      return pending;
+    }
+    return resolved ? image(resolved) : blockedImageNode(this.alt);
   }
 }
 
@@ -96,20 +107,24 @@ class BlockedImageWidget extends WidgetType {
     return other.alt === this.alt;
   }
   toDOM() {
-    const el = document.createElement("span");
-    el.className = "cm-md-image-blocked";
-    if (this.alt) {
-      const alt = document.createElement("span");
-      alt.className = "cm-md-image-blocked-alt";
-      alt.textContent = this.alt;
-      el.appendChild(alt);
-    }
-    const note = document.createElement("span");
-    note.className = "cm-md-image-blocked-note";
-    note.textContent = "image blocked";
-    el.appendChild(note);
-    return el;
+    return blockedImageNode(this.alt);
   }
+}
+
+function blockedImageNode(altText: string) {
+  const el = document.createElement("span");
+  el.className = "cm-md-image-blocked";
+  if (altText) {
+    const alt = document.createElement("span");
+    alt.className = "cm-md-image-blocked-alt";
+    alt.textContent = altText;
+    el.appendChild(alt);
+  }
+  const note = document.createElement("span");
+  note.className = "cm-md-image-blocked-note";
+  note.textContent = "image blocked";
+  el.appendChild(note);
+  return el;
 }
 
 // https, http (except loopback, private, and link-local hosts), data:image, or a file path.
@@ -342,7 +357,7 @@ function buildDecorations(view: EditorView): DecorationSet {
         const alt = marks.length >= 2 ? doc.sliceString(marks[0].to, marks[1].from) : "";
         if (url) {
           const raw = doc.sliceString(url.from, url.to);
-          const widget = imageUrlAllowed(raw) ? new ImageWidget(resolveImage(raw), alt) : new BlockedImageWidget(alt);
+          const widget = imageUrlAllowed(raw) ? new ImageWidget(raw, alt, imageResolverVersion) : new BlockedImageWidget(alt);
           out.push(Decoration.replace({ widget }).range(node.from, node.to));
         }
         return false;
@@ -444,9 +459,15 @@ function buildDecorations(view: EditorView): DecorationSet {
 
 // Relative image paths resolve against the open file's folder. The spike has no file,
 // so this is a hook the Tauri shell replaces.
-let imageResolver: (src: string) => string = (src) => src;
-export function setImageResolver(fn: (src: string) => string) {
+let imageResolver: (src: string) => string | null | Promise<string | null> = (src) => src;
+let imageResolverVersion = 0;
+export function setImageResolver(fn: (src: string) => string | null | Promise<string | null>) {
   imageResolver = fn;
+  imageResolverVersion++;
+}
+export function refreshImageResolver(view: EditorView) {
+  imageResolverVersion++;
+  view.dispatch({ selection: view.state.selection });
 }
 function resolveImage(src: string) {
   return imageResolver(src);

@@ -1,3 +1,9 @@
 fn main() {
-  tauri_build::build()
+  tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+    tauri_build::AppManifest::new().commands(&[
+      "read_document", "write_document", "create_document_window", "frontend_ready",
+      "sync_view_menu", "open_dialog", "save_dialog", "resolve_image_path", "get_keybindings",
+      "set_keybindings", "open_keybindings_file", "suspend_shortcuts",
+    ]),
+  )).expect("failed to build Tauri app manifest")
 }

@@ -12,12 +12,28 @@ export interface ShellDocument {
   // text is what gets written; doc is the editor state that write came from.
   snapshot(): { text: string; doc: Text };
   saved(doc: Text): void;
+  refreshImages(): void;
   onChange(callback: () => void): void;
 }
 
 const SAVE = "Save";
 const DISCARD = "Don’t Save";
-const filters = [{ name: "Markdown and text", extensions: ["md", "markdown", "mdown", "txt"] }];
+
+export function localImageCandidate(source: string, documentPath: string): string | null {
+  const folder = documentPath.replace(/\/[^/]*$/, "");
+  const root = folder.split("/").filter(Boolean);
+  const parts = source.replace(/\\/g, "/").startsWith("/") ? [] : [...root];
+  for (const part of source.replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length <= root.length) return null;
+      parts.pop();
+    } else {
+      parts.push(part);
+    }
+  }
+  return root.every((part, i) => parts[i] === part) && parts.length > root.length ? `/${parts.join("/")}` : null;
+}
 
 // View-menu checkmarks, mirrored from the focused window's modes.
 export interface ViewChecks {
@@ -37,8 +53,8 @@ export async function startShell(
   const invoke = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   if (!invoke) return;
 
-  const [{ invoke: call }, { convertFileSrc }, { getCurrentWindow }, { open, save: saveDialog, message }, { openUrl }] = await Promise.all([
-    import("@tauri-apps/api/core"), import("@tauri-apps/api/core"), import("@tauri-apps/api/window"),
+  const [{ invoke: call, convertFileSrc }, { getCurrentWindow }, { message }, { openUrl }] = await Promise.all([
+    import("@tauri-apps/api/core"), import("@tauri-apps/api/window"),
     import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-opener"),
   ]);
   const win = getCurrentWindow();
@@ -57,6 +73,7 @@ export async function startShell(
       await call("write_document", { path: target, text: snap.text, bom: doc.getBom() });
       path = target;
       doc.saved(snap.doc);
+      doc.refreshImages();
       title();
       return true;
     } catch (error) {
@@ -65,17 +82,17 @@ export async function startShell(
     }
   };
   const saveAs = async (): Promise<boolean> => {
-    const target = await saveDialog({ defaultPath: path || "Untitled.md", filters });
+    const target = await call<string | null>("save_dialog", { defaultPath: path || "Untitled.md" });
     return target ? saveTo(target) : false;
   };
   const save = async (): Promise<boolean> => path ? saveTo(path) : saveAs();
   const openIntoCurrent = async (target: string): Promise<void> => {
     let text: string;
     try {
-      const file = await call<{ text: string; bom: boolean }>("read_document", { path: target });
+      const file = await call<{ text: string; bom: boolean; path: string }>("read_document", { path: target });
       text = file.text;
-      doc.load(file.text, target, file.bom);
-      path = target;
+      path = file.path;
+      doc.load(file.text, file.path, file.bom);
       title();
     } catch (error) {
       await message(String(error), { title: "Couldn’t open document", kind: "error" });
@@ -95,7 +112,7 @@ export async function startShell(
     else await call("create_document_window", { path: target });
   };
   const openDialog = async () => {
-    const selected = await open({ multiple: false, filters });
+    const selected = await call<string | null>("open_dialog");
     if (typeof selected === "string") await openPath(selected);
   };
   const askToClose = async (): Promise<boolean> => {
@@ -110,10 +127,13 @@ export async function startShell(
 
   // Set before the first load so images in the startup document resolve on first render.
   setImageResolver((src) => {
-    if (/^(https?:|data:)/i.test(src) || !path) return src;
-    const folder = path.replace(/[\\/][^\\/]*$/, "");
-    const absolute = src.startsWith("/") ? src : `${folder}/${src}`;
-    return convertFileSrc(absolute);
+    if (/^(https?:|data:)/i.test(src)) return src;
+    if (!path) return null;
+    // DECISION: local images outside the document folder render the blocked placeholder.
+    const candidate = localImageCandidate(src, path);
+    if (!candidate) return null;
+    return call<string | null>("resolve_image_path", { documentPath: path, source: candidate })
+      .then((allowed) => allowed ? convertFileSrc(allowed) : null);
   });
 
   const startupPath = new URLSearchParams(location.search).get("path");
@@ -159,11 +179,9 @@ export async function startShell(
     event.preventDefault();
     if (await askToClose()) { closing = true; await win.close(); }
   });
-  await win.onDragDropEvent(async ({ payload }) => {
-    if (payload.type === "drop") {
-      for (const dropped of payload.paths) {
-        if (/\.(md|markdown|mdown|txt)$/i.test(dropped)) await openPath(dropped);
-      }
+  await win.listen<string[]>("authorized-drop", async ({ payload: paths }) => {
+    for (const dropped of paths) {
+      if (/\.(md|markdown|mdown|txt)$/i.test(dropped)) await openPath(dropped);
     }
   });
 

@@ -5,12 +5,12 @@ import { Compartment, type Extension, type Text } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { lineEndings, makeState, replaceDocument } from "./app/document";
 import { createOutline } from "./app/outline";
-import { type ShellDocument, startShell, type ViewChecks } from "./app/shell";
+import { localImageCandidate, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
 import { codeHighlight } from "./editor/codeHighlight";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
-import { imageUrlAllowed, livePreview } from "./editor/livePreview";
+import { imageUrlAllowed, livePreview, refreshImageResolver } from "./editor/livePreview";
 import { formatInCell, insertTable, setCellKeys } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import sample from "./sample.md?raw";
@@ -198,6 +198,7 @@ const doc: ShellDocument = {
   load,
   snapshot: () => ({ text: view.state.sliceDoc(), doc: view.state.doc }),
   saved: (next) => { savedDoc = next; },
+  refreshImages: () => refreshImageResolver(view),
   onChange: (callback) => { documentChanged = callback; },
 };
 
@@ -222,6 +223,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   modes,
   lineEndings,
   imageUrlAllowed,
+  localImageCandidate,
   snapshot: () => doc.snapshot(),
   saved: (next: Text) => doc.saved(next),
   isDirty: () => doc.isDirty(),
