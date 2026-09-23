@@ -83,9 +83,6 @@ await cell(1, 2).click();
 await page.locator(".cm-md-table-tools button", { hasText: "+ Row" }).dispatchEvent("mousedown"); await settle();
 check("structural edit keeps table valid", JSON.stringify(await widgets()) === "[3]", JSON.stringify(await text()));
 
-// Tables inside a blockquote stay raw instead of being rewritten without their `>` markers.
-await load("> | A | B |\n> |---|---|\n> | 1 | 2 |\n"); await settle();
-check("quoted table stays raw", (await widgets()).length === 0);
 
 // A pipe after two backslashes is bare, so it must be escaped with a third.
 await load("| A | B |\n|---|---|\n| 1 | 2 |\n"); await settle();
@@ -157,6 +154,53 @@ check("cmd-i wraps and keeps typing inside", (await tableSrc()).split("\n")[2] =
 await page.keyboard.press(`${mod}+z`); await settle();
 await page.keyboard.press(`${mod}+z`); await settle();
 check("format is its own undo step", (await tableSrc()).split("\n")[2] === "| word |", (await tableSrc()).split("\n")[2]);
+
+// --- Local structural edits: only the touched lines/cells change ---
+const tool = (label) => page.locator(".cm-md-table-tools button", { hasText: label }).first().dispatchEvent("mousedown");
+const padded = "| Name   | Qty |\n| ------ | --: |\n| apple  | 3   |\n| pear   | 10  |\n";
+const expectEdit = async (name, setup, want) => {
+  await load(padded); await settle();
+  await setup(); await settle();
+  check(name, (await text()) === want, JSON.stringify(await text()));
+};
+await expectEdit("add row inserts one line", async () => { await cell(1, 0).click(); await tool("+ Row"); },
+  "| Name   | Qty |\n| ------ | --: |\n| apple  | 3   |\n|  |  |\n| pear   | 10  |\n");
+await expectEdit("delete middle row", async () => { await cell(1, 0).click(); await tool("− Row"); },
+  "| Name   | Qty |\n| ------ | --: |\n| pear   | 10  |\n");
+await expectEdit("delete last row", async () => { await cell(2, 0).click(); await tool("− Row"); },
+  "| Name   | Qty |\n| ------ | --: |\n| apple  | 3   |\n");
+await expectEdit("add column touches one cell per line", async () => { await cell(1, 0).click(); await tool("+ Col"); },
+  "| Name   |  | Qty |\n| ------ | --- | --: |\n| apple  |  | 3   |\n| pear   |  | 10  |\n");
+await expectEdit("delete column", async () => { await cell(1, 1).click(); await tool("− Col"); },
+  "| Name   |\n| ------ |\n| apple  |\n| pear   |\n");
+await expectEdit("align keeps delimiter width", async () => { await cell(1, 0).click(); await tool("↔"); },
+  "| Name   | Qty |\n| :----: | --: |\n| apple  | 3   |\n| pear   | 10  |\n");
+
+// Without outer pipes, a new last column is closed with a pipe so it counts as a cell.
+await load("a | b\n--|--\n1 | 2\n"); await settle();
+await cell(1, 1).click(); await tool("+ Col"); await settle();
+check("add last column without outer pipes", (await text()) === "a | b |  |\n--|-- | --- |\n1 | 2 |  |\n" && JSON.stringify(await widgets()) === "[3]", JSON.stringify(await text()));
+
+// Tidy lines up the columns, respecting alignment.
+await load("| a | bb |\n|:-|-:|\n| long text | 1 |\n"); await settle();
+await cell(1, 0).click(); await tool("Tidy"); await settle();
+check("tidy pads and aligns", (await text()) === "| a         |  bb |\n|:----------|----:|\n| long text |   1 |\n", JSON.stringify(await text()));
+
+// --- Tables inside lists and quotes ---
+await load("- | a | b |\n  |---|---|\n  | 1 | 2 |\n"); await settle();
+check("list table renders", JSON.stringify(await widgets()) === "[2]", JSON.stringify(await widgets()));
+await cell(1, 1).click(); await page.keyboard.press(`${mod}+ArrowRight`); await page.keyboard.type("x"); await settle();
+await tool("+ Row"); await settle();
+check("list table edits keep indentation", (await text()) === "- | a | b |\n  |---|---|\n  | 1 | 2x |\n  |  |  |\n", JSON.stringify(await text()));
+await page.screenshot({ path: `${out}/t4-list-table.png`, clip: { x: 0, y: 0, width: 1100, height: 300 } });
+
+await load("> | A | B |\n> |---|---|\n> | 1 | 2 |\n\nAfter\n"); await settle();
+check("quoted table renders", JSON.stringify(await widgets()) === "[2]", JSON.stringify(await widgets()));
+await cell(1, 0).click(); await tool("+ Row"); await settle();
+check("quoted table new row keeps >", (await text()) === "> | A | B |\n> |---|---|\n> | 1 | 2 |\n> |  |  |\n\nAfter\n", JSON.stringify(await text()));
+await page.screenshot({ path: `${out}/t5-quote-table.png`, clip: { x: 0, y: 0, width: 1100, height: 300 } });
+await cell(1, 0).click(); await tool("Delete"); await settle();
+check("delete quoted table keeps the quote", (await text()) === "> \n\nAfter\n", JSON.stringify(await text()));
 
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();

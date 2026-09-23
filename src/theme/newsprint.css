@@ -436,6 +436,29 @@ body {
 #editor .cm-md-table-wrap {
   position: relative;
 }
+/* Tables inside a blockquote or list item take the container's bar or indent. */
+#editor .cm-md-table-wrap.is-quoted {
+  margin-left: 2em;
+  padding-left: 1em;
+  border-left: 5px solid var(--quote-bar);
+}
+#editor .cm-md-table-wrap.is-quoted .cm-md-table {
+  font-style: italic;
+  color: var(--muted);
+}
+#editor .cm-md-table-wrap.is-listed {
+  margin-left: calc(var(--list-depth) * (1.5em + 30px));
+}
+#editor .cm-md-table-marker {
+  position: absolute;
+  left: -30px;
+  top: 0.5em;
+  box-sizing: border-box;
+  width: 30px;
+  padding-right: 0.7em;
+  text-align: right;
+  user-select: none;
+}
 #editor .cm-md-cell {
   outline: none;
   min-height: var(--line);

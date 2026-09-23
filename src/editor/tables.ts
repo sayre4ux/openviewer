@@ -1,15 +1,17 @@
 import { isolateHistory, redo, undo } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
-import { type EditorState, Prec, type Range, StateField } from "@codemirror/state";
+import { type ChangeSpec, type EditorState, Prec, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 
 // GFM tables render as an editable <table>, as in Typora. Each cell is its own small editor:
 // while focused it shows the cell's raw Markdown, otherwise the rendered inline formatting.
-// Typing rewrites only that cell's text in the document, so the rest of the file keeps its
-// exact bytes. Structural edits (rows, columns, alignment) rewrite the table in a normalized
-// `| a | b |` form. Tables span several lines, so the widget is a block decoration, and block
-// decorations have to come from a state field rather than the live-preview view plugin.
+// Every edit is local: typing rewrites only that cell, adding a row inserts one line, adding or
+// removing a column touches one cell per line, alignment touches one delimiter cell. The rest of
+// the file keeps its exact bytes. "Tidy" is the one explicit edit that reformats a whole table.
+// Tables inside blockquotes and list items work too: each line keeps its container prefix, and
+// new rows copy the delimiter row's prefix. Tables span several lines, so the widget is a block
+// decoration, and block decorations have to come from a state field rather than a view plugin.
 
 type Align = "left" | "center" | "right" | null;
 
@@ -20,36 +22,59 @@ interface Cell {
   segTo: number;
 }
 
-interface TableData {
-  from: number;
+interface Row {
+  from: number; // row start, after any container prefix (`> `, list indent, bullet)
   to: number;
-  rows: Cell[][]; // header first; the delimiter row is not included
-  rowEnds: { lastPipe: number | null; to: number; trailingPipe: boolean }[];
-  align: Align[];
+  lineFrom: number;
+  lineTo: number;
+  cells: Cell[];
+  lastPipe: number | null;
+  trailingPipe: boolean;
 }
 
-function segment(doc: EditorState["doc"], a: number, b: number): Cell {
+interface TableData {
+  from: number; // whole lines covered by the widget
+  to: number;
+  rows: Row[]; // header first, then body rows
+  delim: Row; // the |---| row; its cells hold the dash specs
+  align: Align[];
+  quote: number; // container depth
+  list: number;
+  marker: string | null; // list bullet on the header line, when the table starts a list item
+  prefix: string; // the delimiter line's container prefix, copied into new rows
+}
+
+type Doc = EditorState["doc"];
+
+function segment(doc: Doc, a: number, b: number): Cell {
   const raw = doc.sliceString(a, b);
   const lead = raw.length - raw.trimStart().length;
   return { text: raw.trim(), from: a + lead, segFrom: a, segTo: b };
 }
 
-// Cells come from the parser's own pipe positions (TableDelimiter nodes), so the widget and the
-// Markdown parser always agree on where cells split, including pipes inside code spans.
-function rowCells(doc: EditorState["doc"], row: SyntaxNode): Cell[] {
-  const pipes: number[] = [];
-  for (let c = row.firstChild; c; c = c.nextSibling) if (c.name === "TableDelimiter") pipes.push(c.from);
-  if (pipes[0] !== row.from) pipes.unshift(row.from - 1); // no leading pipe
+// Split a row at its pipe positions. After the final pipe, only real text is a cell; trailing
+// whitespace is not.
+function makeRow(doc: Doc, from: number, to: number, pipes: number[]): Row {
+  const cuts = pipes[0] === from ? [...pipes] : [from - 1, ...pipes]; // -1: no leading pipe
   const cells: Cell[] = [];
-  for (let i = 0; i < pipes.length; i++) {
-    const at = pipes[i] + 1;
-    const last = i + 1 === pipes.length;
-    const next = last ? row.to : pipes[i + 1];
-    // After the final pipe, only real text is a cell; trailing whitespace is not.
+  for (let i = 0; i < cuts.length; i++) {
+    const at = cuts[i] + 1;
+    const last = i + 1 === cuts.length;
+    const next = last ? to : cuts[i + 1];
     if (last && doc.sliceString(at, next).trim() === "") break;
     cells.push(segment(doc, at, next));
   }
-  return cells;
+  const lastPipe = pipes.length ? pipes[pipes.length - 1] : null;
+  const line = doc.lineAt(from);
+  return {
+    from,
+    to,
+    lineFrom: line.from,
+    lineTo: line.to,
+    cells,
+    lastPipe,
+    trailingPipe: lastPipe !== null && doc.sliceString(lastPipe + 1, to).trim() === "",
+  };
 }
 
 function alignment(cell: string): Align {
@@ -60,37 +85,60 @@ function alignment(cell: string): Align {
   return null;
 }
 
-// DECISION: only top-level tables get the editable widget. Tables inside quotes or lists
-// stay as raw source, because rewriting them would have to preserve each line's `>`/indent.
+// Cells come from the parser's own pipe positions (TableDelimiter nodes inside each row), so the
+// widget and the parser always agree on where cells split, including pipes inside code spans.
+// The delimiter row has no child nodes, but it can't contain escapes or code, so its pipes are
+// found by scanning.
 function readTable(state: EditorState, table: SyntaxNode): TableData | null {
-  if (table.parent?.name !== "Document") return null;
   const doc = state.doc;
-  const rows: Cell[][] = [];
-  const rowEnds: TableData["rowEnds"] = [];
-  let align: Align[] = [];
+  const rows: Row[] = [];
+  let delim: Row | null = null;
   for (let c = table.firstChild; c; c = c.nextSibling) {
     if (c.name === "TableHeader" || c.name === "TableRow") {
-      rows.push(rowCells(doc, c));
-      const pipes = c.getChildren("TableDelimiter");
-      const lastPipe = pipes.length ? pipes[pipes.length - 1].from : null;
-      const trailingPipe = lastPipe !== null && doc.sliceString(lastPipe + 1, c.to).trim() === "";
-      rowEnds.push({ lastPipe, to: c.to, trailingPipe });
-    }
-    else if (c.name === "TableDelimiter") {
-      align = doc.sliceString(c.from, c.to).split("|").map((p) => p.trim()).filter(Boolean).map(alignment);
+      rows.push(makeRow(doc, c.from, c.to, c.getChildren("TableDelimiter").map((d) => d.from)));
+    } else if (c.name === "TableDelimiter") {
+      const text = doc.sliceString(c.from, c.to);
+      const pipes = [...text].flatMap((ch, i) => (ch === "|" ? [c.from + i] : []));
+      delim = makeRow(doc, c.from, c.to, pipes);
     }
   }
-  if (rows.length === 0 || rows[0].length === 0) return null;
-  return { from: doc.lineAt(table.from).from, to: doc.lineAt(table.to).to, rows, rowEnds, align };
+  if (!delim || rows.length === 0 || rows[0].cells.length === 0) return null;
+
+  let quote = 0;
+  let list = 0;
+  for (let p = table.parent; p; p = p.parent) {
+    if (p.name === "Blockquote") quote++;
+    else if (p.name === "ListItem") list++;
+  }
+  let marker: string | null = null;
+  const item = table.parent?.name === "ListItem" ? table.parent : null;
+  const mark = item?.getChild("ListMark");
+  if (item && mark && doc.lineAt(mark.from).number === doc.lineAt(table.from).number) {
+    const text = doc.sliceString(mark.from, mark.to);
+    marker = item.parent?.name === "OrderedList" ? text : "\u2022";
+  }
+  return {
+    from: doc.lineAt(table.from).from,
+    to: doc.lineAt(table.to).to,
+    rows,
+    delim,
+    align: delim.cells.map((c) => alignment(c.text)),
+    quote,
+    list,
+    marker,
+    prefix: doc.sliceString(delim.lineFrom, delim.from),
+  };
 }
 
+// The table whose lines include `pos`. The widget starts at a line start, which for a nested
+// table is before the Table node (the `> ` or indent comes first), so search to the line end.
 function tableAt(state: EditorState, pos: number): TableData | null {
   let found: TableData | null = null;
   syntaxTree(state).iterate({
     from: pos,
-    to: pos,
+    to: state.doc.lineAt(pos).to,
     enter: (node) => {
-      if (node.name !== "Table") return;
+      if (found || node.name !== "Table") return;
       found = readTable(state, node.node);
       return false;
     },
@@ -98,15 +146,46 @@ function tableAt(state: EditorState, pos: number): TableData | null {
   return found;
 }
 
-function serialize(rows: string[][], align: Align[], lineBreak: string): string {
-  const width = Math.max(align.length, ...rows.map((r) => r.length));
-  const line = (cells: string[]) =>
-    "| " + Array.from({ length: width }, (_, i) => cells[i] ?? "").join(" | ") + " |";
-  const delim = Array.from({ length: width }, (_, i) => {
-    const a = align[i];
-    return a === "center" ? ":---:" : a === "right" ? "---:" : a === "left" ? ":---" : "---";
+const emptyRow = (width: number) => "|" + "  |".repeat(width);
+
+// Width on screen, counting CJK and full-width characters as two columns.
+function displayWidth(s: string) {
+  let w = 0;
+  for (const ch of s) w += /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\uFF01-\uFF60\uFFE0-\uFFE6]/u.test(ch) ? 2 : 1;
+  return w;
+}
+
+// "Tidy": pad every column to a common width and draw the delimiter row to match. Container
+// prefixes stay, since only each row's own text (after its prefix) is rewritten.
+function tidyChanges(t: TableData): ChangeSpec[] {
+  const width = t.rows[0].cells.length;
+  const texts = t.rows.map((r) => {
+    const cells = r.cells.map((c) => c.text);
+    while (cells.length < width) cells.push("");
+    return cells;
   });
-  return [line(rows[0]), "|" + delim.join("|") + "|", ...rows.slice(1).map(line)].join(lineBreak);
+  const cols = Math.max(...texts.map((r) => r.length));
+  const widths = Array.from({ length: cols }, (_, j) => Math.max(3, ...texts.map((r) => (r[j] === undefined ? 0 : displayWidth(r[j])))));
+  const pad = (s: string, j: number) => {
+    const gap = widths[j] - displayWidth(s);
+    const a = t.align[j];
+    if (a === "right") return " ".repeat(gap) + s;
+    if (a === "center") return " ".repeat(Math.floor(gap / 2)) + s + " ".repeat(Math.ceil(gap / 2));
+    return s + " ".repeat(gap);
+  };
+  const line = (cells: string[]) => "| " + cells.map(pad).join(" | ") + " |";
+  const dash = (j: number) => {
+    const a = t.align[j];
+    const left = a === "left" || a === "center";
+    const right = a === "right" || a === "center";
+    return (left ? ":" : "") + "-".repeat(widths[j] + 2 - (left ? 1 : 0) - (right ? 1 : 0)) + (right ? ":" : "");
+  };
+  const delimText = "|" + Array.from({ length: width }, (_, j) => dash(j)).join("|") + "|";
+  return [
+    { from: t.rows[0].from, to: t.rows[0].lineTo, insert: line(texts[0]) },
+    { from: t.delim.from, to: t.delim.lineTo, insert: delimText },
+    ...t.rows.slice(1).map((r, i) => ({ from: r.from, to: r.lineTo, insert: line(texts[i + 1]) })),
+  ];
 }
 
 function escapeHtml(s: string) {
@@ -223,34 +302,48 @@ class TableWidget extends WidgetType {
     return other.source === this.source && other.data.from === this.data.from;
   }
 
-  private cellEls(dom: HTMLElement) {
-    return Array.from(dom.querySelectorAll<HTMLElement>(".cm-md-cell"));
+  private width() {
+    return this.data.rows[0].cells.length;
   }
 
   private shape() {
-    return `${this.data.rows.length}x${this.data.rows[0].length}:${this.data.align.join(",")}`;
+    const d = this.data;
+    return `${d.rows.length}x${this.width()}:${d.align.join(",")}:${d.quote},${d.list},${d.marker ?? ""}`;
   }
 
   toDOM(view: EditorView) {
+    const d = this.data;
     const wrap = document.createElement("div");
     wrap.className = "cm-md-table-wrap";
     wrap.dataset.shape = this.shape();
+    // Inside a quote or list the table takes that container's bar or indent.
+    if (d.quote) wrap.classList.add("is-quoted");
+    if (d.list) {
+      wrap.classList.add("is-listed");
+      wrap.style.setProperty("--list-depth", String(d.list));
+    }
+    if (d.marker) {
+      const marker = document.createElement("span");
+      marker.className = "cm-md-table-marker";
+      marker.textContent = d.marker;
+      wrap.appendChild(marker);
+    }
     wrap.appendChild(this.toolbar(view, wrap));
     const table = document.createElement("table");
     table.className = "cm-md-table";
-    const columns = this.data.rows[0].length;
-    this.data.rows.forEach((row, r) => {
+    const columns = this.width();
+    d.rows.forEach((row, r) => {
       const tr = document.createElement("tr");
       for (let c = 0; c < columns; c++) {
         const td = document.createElement(r === 0 ? "th" : "td");
-        if (this.data.align[c]) td.style.textAlign = this.data.align[c]!;
+        if (d.align[c]) td.style.textAlign = d.align[c]!;
         const cell = document.createElement("div");
         cell.className = "cm-md-cell";
         cell.contentEditable = "plaintext-only";
         cell.spellcheck = false;
         cell.dataset.row = String(r);
         cell.dataset.col = String(c);
-        cell.dataset.raw = row[c]?.text ?? "";
+        cell.dataset.raw = row.cells[c]?.text ?? "";
         cell.innerHTML = renderInline(cell.dataset.raw);
         this.bindCell(view, wrap, cell);
         td.appendChild(cell);
@@ -271,8 +364,8 @@ class TableWidget extends WidgetType {
   // Keep the DOM (and the focused cell's caret) when only cell text changed.
   updateDOM(dom: HTMLElement, view: EditorView) {
     if (dom.dataset.shape !== this.shape()) return false;
-    for (const cell of this.cellEls(dom)) {
-      const raw = this.data.rows[Number(cell.dataset.row)][Number(cell.dataset.col)]?.text ?? "";
+    for (const cell of dom.querySelectorAll<HTMLElement>(".cm-md-cell")) {
+      const raw = this.data.rows[Number(cell.dataset.row)].cells[Number(cell.dataset.col)]?.text ?? "";
       if (cell.dataset.raw === raw) continue;
       cell.dataset.raw = raw;
       if (document.activeElement === cell) {
@@ -306,13 +399,12 @@ class TableWidget extends WidgetType {
   }
 
   private bindCell(view: EditorView, wrap: HTMLElement, cell: HTMLElement) {
-    const row = () => Number(cell.dataset.row);
-    const col = () => Number(cell.dataset.col);
-
     // Reveal the raw Markdown when a cell gains focus (only if it differs from what is shown).
-    // `offset` is a caret position in the rendered text, mapped into the raw text.
+    // `clickOffset` is a caret position in the rendered text, mapped into the raw text.
     let clickOffset: number | null = null;
-    cell.addEventListener("compositionstart", () => { this.composing = true; });
+    cell.addEventListener("compositionstart", () => {
+      this.composing = true;
+    });
     cell.addEventListener("compositionend", () => {
       this.composedAt = performance.now();
       this.composing = false;
@@ -352,21 +444,20 @@ class TableWidget extends WidgetType {
       cell.focus({ preventScroll: true });
     });
     cell.addEventListener("input", () => this.commit(view, wrap, cell, false));
-    cell.addEventListener("keydown", (e) => this.onKey(e, view, wrap, row(), col(), cell));
+    cell.addEventListener("keydown", (e) => this.onKey(e, view, wrap, Number(cell.dataset.row), Number(cell.dataset.col), cell));
   }
 
   // Write the cell's current text into the document. Typing merges into one undo step per
   // burst; `isolate` makes an edit (such as ⌘B) its own undo step.
   private commit(view: EditorView, wrap: HTMLElement, cell: HTMLElement, isolate: boolean) {
     const table = this.current(view, wrap);
-    const r = Number(cell.dataset.row);
+    const row = table?.rows[Number(cell.dataset.row)];
+    if (!table || !row) return;
     const c = Number(cell.dataset.col);
-    const cells = table?.rows[r];
-    if (!table || !cells) return;
     const text = escapePipes(cell.textContent ?? "").trimEnd();
     cell.dataset.raw = text;
-    const target = cells[c];
-    let change;
+    const target = row.cells[c];
+    let change: ChangeSpec;
     if (target) {
       // Rewrite from the cell text to the closing pipe, so trailing spaces typed and later
       // continued don't pile up as padding. The edited cell ends with one space of padding.
@@ -376,13 +467,12 @@ class TableWidget extends WidgetType {
     } else {
       // A row shorter than the header shows empty cells that don't exist in the source yet:
       // append the missing ones through this column.
-      const end = table.rowEnds[r];
       let insert = "";
-      for (let j = cells.length; j <= c; j++) {
+      for (let j = row.cells.length; j <= c; j++) {
         const content = j === c ? text : "";
-        insert += end.trailingPipe ? ` ${content} |` : ` | ${content}`;
+        insert += row.trailingPipe ? ` ${content} |` : ` | ${content}`;
       }
-      change = { from: end.trailingPipe ? end.lastPipe! + 1 : end.to, insert };
+      change = { from: row.trailingPipe ? row.lastPipe! + 1 : row.to, insert };
     }
     view.dispatch({
       changes: change,
@@ -415,7 +505,7 @@ class TableWidget extends WidgetType {
     // after compositionend without the composing flag, hence the short grace period.
     if (e.isComposing || e.keyCode === 229 || this.composing || performance.now() - this.composedAt < 80) return;
     const rows = this.data.rows.length;
-    const cols = this.data.rows[0].length;
+    const cols = this.width();
     const mod = e.metaKey || e.ctrlKey;
     const go = (row: number, col: number, at: "start" | "end") => {
       const el = wrap.querySelector<HTMLElement>(`.cm-md-cell[data-row="${row}"][data-col="${col}"]`);
@@ -437,11 +527,7 @@ class TableWidget extends WidgetType {
     } else if (format) {
       this.toggleFormat(view, wrap, cell, format);
     } else if (mod && e.key.toLowerCase() === "a") {
-      const range = document.createRange();
-      range.selectNodeContents(cell);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
+      selectText(cell, 0, len);
     } else if (mod && e.key.toLowerCase() === "z") {
       if (e.shiftKey) redo(view);
       else undo(view);
@@ -487,17 +573,14 @@ class TableWidget extends WidgetType {
     const table = this.current(view, wrap);
     if (!table) return;
     const doc = view.state.doc;
+    const br = view.state.lineBreak;
     if (side === "above") {
       const line = doc.lineAt(table.from);
-      if (line.number === 1) {
-        view.dispatch({ changes: { from: 0, insert: view.state.lineBreak }, selection: { anchor: 0 } });
-      } else {
-        view.dispatch({ selection: { anchor: doc.line(line.number - 1).to } });
-      }
+      if (line.number === 1) view.dispatch({ changes: { from: 0, insert: br }, selection: { anchor: 0 } });
+      else view.dispatch({ selection: { anchor: doc.line(line.number - 1).to } });
     } else {
       const line = doc.lineAt(table.to);
       if (line.number === doc.lines) {
-        const br = view.state.lineBreak;
         view.dispatch({ changes: { from: doc.length, insert: br }, selection: { anchor: doc.length + br.length } });
       } else {
         view.dispatch({ selection: { anchor: doc.line(line.number + 1).from } });
@@ -506,49 +589,94 @@ class TableWidget extends WidgetType {
     view.focus();
   }
 
+  // Row/column/alignment edits, each written as the smallest local change.
   structural(view: EditorView, wrap: HTMLElement, op: string, r: number, c: number) {
-    const table = this.current(view, wrap);
-    if (!table) return;
-    const rows = table.rows.map((row) => row.map((cell) => cell.text));
-    const width = Math.max(...rows.map((row) => row.length));
-    for (const row of rows) while (row.length < width) row.push("");
-    const align = [...table.align];
-    while (align.length < width) align.push(null);
+    const t = this.current(view, wrap);
+    if (!t) return;
+    const doc = view.state.doc;
+    const br = view.state.lineBreak;
+    const width = t.rows[0].cells.length;
+    const lines = [t.rows[0], t.delim, ...t.rows.slice(1)]; // every row in source order
+    const changes: ChangeSpec[] = [];
     let focus = { row: r, col: c };
 
     switch (op) {
-      case "row-below":
-        rows.splice(r + 1, 0, Array(width).fill(""));
+      case "row-below": {
+        // Insert one line after this row (after the delimiter row for the header).
+        const anchor = r === 0 ? t.delim : t.rows[r];
+        changes.push({ from: anchor.lineTo, insert: br + t.prefix + emptyRow(width) });
         focus = { row: r + 1, col: c };
         break;
-      case "row-delete":
-        if (r === 0 || rows.length <= 2) return; // keep the header and at least one body row
-        rows.splice(r, 1);
-        focus = { row: Math.min(r, rows.length - 1), col: c };
+      }
+      case "row-delete": {
+        if (r === 0 || t.rows.length <= 2) return; // keep the header and one body row
+        const line = doc.lineAt(t.rows[r].from);
+        if (line.to >= t.to) changes.push({ from: doc.line(line.number - 1).to, to: line.to });
+        else changes.push({ from: line.from, to: doc.line(line.number + 1).from });
+        focus = { row: Math.min(r, t.rows.length - 2), col: c };
         break;
-      case "col-right":
-        rows.forEach((row) => row.splice(c + 1, 0, ""));
-        align.splice(c + 1, 0, null);
+      }
+      case "col-right": {
+        // One new cell right of column c on every line that has a column c; short rows are
+        // left alone (GFM pads them).
+        for (const row of lines) {
+          const cell = row.cells[c];
+          if (!cell) continue;
+          const content = row === t.delim ? "---" : "";
+          const pipeAfter = c < row.cells.length - 1 || row.trailingPipe;
+          if (pipeAfter) changes.push({ from: cell.segTo + 1, insert: ` ${content} |` });
+          // A bare trailing pipe isn't a cell, so close the new cell with one.
+          else changes.push({ from: row.to, insert: ` | ${content} |` });
+        }
         focus = { row: r, col: c + 1 };
         break;
-      case "col-delete":
+      }
+      case "col-delete": {
         if (width <= 1) return;
-        rows.forEach((row) => row.splice(c, 1));
-        align.splice(c, 1);
+        for (const row of lines) {
+          const cell = row.cells[c];
+          if (!cell) continue;
+          if (row.cells.length === 1) {
+            // Empty the row's only cell but keep a pipe, or a pipe-less row would become a blank
+            // line and end the table.
+            if (row.lastPipe === null) changes.push({ from: row.from, to: row.to, insert: emptyRow(1) });
+            else changes.push({ from: cell.segFrom, to: cell.segTo, insert: " " });
+          } else if (cell.segFrom > row.from) {
+            changes.push({ from: cell.segFrom - 1, to: cell.segTo }); // the pipe before it, and it
+          } else {
+            changes.push({ from: cell.segFrom, to: Math.min(cell.segTo + 1, row.to) }); // it, and the pipe after
+          }
+        }
         focus = { row: r, col: Math.min(c, width - 2) };
         break;
+      }
       case "align-left":
       case "align-center":
-      case "align-right":
-        align[c] = op.slice(6) as Align;
+      case "align-right": {
+        // Swap colons in this column's delimiter cell, keeping its width so aligned tables stay aligned.
+        const spec = t.delim.cells[c];
+        if (!spec) return;
+        const a = op.slice(6);
+        const left = a === "left" || a === "center";
+        const right = a === "right" || a === "center";
+        const len = spec.text.length;
+        const dashes = Math.max(1, len - (left ? 1 : 0) - (right ? 1 : 0));
+        changes.push({ from: spec.from, to: spec.from + len, insert: (left ? ":" : "") + "-".repeat(dashes) + (right ? ":" : "") });
         break;
-      case "delete-table":
-        view.dispatch({ changes: { from: table.from, to: table.to, insert: "" }, selection: { anchor: table.from } });
+      }
+      case "tidy":
+        changes.push(...tidyChanges(t));
+        break;
+      case "delete-table": {
+        // Keep the header line's container prefix (`> `, a list bullet) so the container survives.
+        const from = t.quote || t.list ? t.rows[0].from : t.from;
+        view.dispatch({ changes: { from, to: t.to }, selection: { anchor: from }, userEvent: "delete" });
         view.focus();
         return;
+      }
     }
-    pendingFocus = { tableFrom: table.from, ...focus, at: "end" };
-    view.dispatch({ changes: { from: table.from, to: table.to, insert: serialize(rows, align, view.state.lineBreak) } });
+    pendingFocus = { tableFrom: t.from, ...focus, at: "end" };
+    view.dispatch({ changes, userEvent: "input", annotations: isolateHistory.of("full") });
   }
 
   private toolbar(view: EditorView, wrap: HTMLElement) {
@@ -562,6 +690,7 @@ class TableWidget extends WidgetType {
       ["row-delete", "− Row", "Delete row"],
       ["col-right", "+ Col", "Add column right"],
       ["col-delete", "− Col", "Delete column"],
+      ["tidy", "Tidy", "Line up the table's columns in the Markdown source"],
       ["delete-table", "Delete", "Delete table"],
     ];
     for (const [op, label, title] of buttons) {
@@ -656,7 +785,7 @@ const tableKeys = Prec.high(
         if (!empty) return false;
         const table = head > 0 ? tableAt(view.state, head - 1) : null;
         if (!table || table.to !== head) return false;
-        return focusCell(view, table.from, "last", table.rows[0].length - 1);
+        return focusCell(view, table.from, "last", table.rows[0].cells.length - 1);
       },
     },
   ]),
@@ -674,14 +803,7 @@ export function insertTable(view: EditorView) {
   const activeTable = activeWrap && view.contentDOM.contains(activeWrap) ? tableAt(state, view.posAtDOM(activeWrap)) : null;
   const line = state.doc.lineAt(activeTable ? activeTable.to : state.selection.main.head);
   const next = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
-  const table = serialize(
-    [
-      ["Column 1", "Column 2", "Column 3"],
-      ["", "", ""],
-    ],
-    [null, null, null],
-    br,
-  );
+  const table = ["| Column 1 | Column 2 | Column 3 |", "|---|---|---|", emptyRow(3)].join(br);
   const before = state.doc.length === 0 ? "" : line.text.trim() === "" ? br : br + br;
   const after = next && next.text.trim() !== "" ? br : "";
   const at = line.to;
