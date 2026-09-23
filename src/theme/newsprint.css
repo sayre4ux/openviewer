@@ -447,7 +447,13 @@ body {
   color: var(--muted);
 }
 #editor .cm-md-table-wrap.is-listed {
-  margin-left: calc(var(--list-depth) * (1.5em + 30px));
+  --list-indent: calc(var(--list-depth) * (1.5em + 30px));
+  margin-left: var(--list-indent);
+}
+/* A table in a list inside a quote: the bar stays at the quote, the list indent goes inside it. */
+#editor .cm-md-table-wrap.is-quoted.is-listed {
+  margin-left: 2em;
+  padding-left: calc(1em + var(--list-indent));
 }
 #editor .cm-md-table-marker {
   position: absolute;
@@ -458,6 +464,9 @@ body {
   padding-right: 0.7em;
   text-align: right;
   user-select: none;
+}
+#editor .cm-md-table-wrap.is-quoted.is-listed .cm-md-table-marker {
+  left: calc(1em + var(--list-indent) - 30px);
 }
 #editor .cm-md-cell {
   outline: none;

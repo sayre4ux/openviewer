@@ -202,6 +202,34 @@ await page.screenshot({ path: `${out}/t5-quote-table.png`, clip: { x: 0, y: 0, w
 await cell(1, 0).click(); await tool("Delete"); await settle();
 check("delete quoted table keeps the quote", (await text()) === "> \n\nAfter\n", JSON.stringify(await text()));
 
+// --- Regressions from the third review ---
+// Deleting a column of an unpiped two-column table keeps pipes, so it stays a table.
+await load("a | b\n--|--\n1 | 2\n"); await settle();
+await cell(1, 0).click(); await tool("− Col"); await settle();
+check("unpiped column delete stays a table", (await text()) === "| b |\n| -- |\n| 2 |\n" && JSON.stringify(await widgets()) === "[1]", JSON.stringify(await text()));
+
+// On macOS, Control-B is a cursor key, not bold.
+if (process.platform === "darwin") {
+  await load("| A |\n|---|\n| xy |\n"); await settle();
+  await cell(1, 0).click(); await page.keyboard.press("Control+b"); await settle();
+  check("control-b does not format on macOS", (await tableSrc()).split("\n")[2] === "| xy |", (await tableSrc()).split("\n")[2]);
+}
+
+// Tidy counts CJK punctuation as two columns.
+await load("| 名 |\n|---|\n| 漢、 |\n| abcd |\n"); await settle();
+await cell(1, 0).click(); await tool("Tidy"); await settle();
+check("tidy measures CJK punctuation", (await text()) === "| 名   |\n|------|\n| 漢、 |\n| abcd |\n", JSON.stringify(await text()));
+
+// A table in a list inside a quote renders with the bar outside the list indent.
+await load("> - | a | b |\n>   |---|---|\n>   | 1 | 2 |\n"); await settle();
+const nestedBox = await page.evaluate(() => {
+  const w = document.querySelector(".cm-md-table-wrap");
+  const t = w?.querySelector("table");
+  return w && t ? { classes: w.className, gap: Math.round(t.getBoundingClientRect().left - w.getBoundingClientRect().left) } : null;
+});
+check("quote+list table composes indent", !!nestedBox && nestedBox.classes.includes("is-quoted") && nestedBox.classes.includes("is-listed") && nestedBox.gap > 40, JSON.stringify(nestedBox));
+await page.screenshot({ path: `${out}/t6-quote-list-table.png`, clip: { x: 0, y: 0, width: 1100, height: 260 } });
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);

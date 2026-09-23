@@ -15,6 +15,8 @@ import type { SyntaxNode } from "@lezer/common";
 
 type Align = "left" | "center" | "right" | null;
 
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
 interface Cell {
   text: string;
   from: number; // start of the trimmed text
@@ -28,6 +30,7 @@ interface Row {
   lineFrom: number;
   lineTo: number;
   cells: Cell[];
+  pipes: number;
   lastPipe: number | null;
   trailingPipe: boolean;
 }
@@ -72,6 +75,7 @@ function makeRow(doc: Doc, from: number, to: number, pipes: number[]): Row {
     lineFrom: line.from,
     lineTo: line.to,
     cells,
+    pipes: pipes.length,
     lastPipe,
     trailingPipe: lastPipe !== null && doc.sliceString(lastPipe + 1, to).trim() === "",
   };
@@ -148,10 +152,18 @@ function tableAt(state: EditorState, pos: number): TableData | null {
 
 const emptyRow = (width: number) => "|" + "  |".repeat(width);
 
-// Width on screen, counting CJK and full-width characters as two columns.
+// Width in a monospaced editor: East Asian wide and full-width characters take two columns.
+const wideRanges: [number, number][] = [
+  [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf], [0x4e00, 0x9fff],
+  [0xa000, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe30, 0xfe4f], [0xff00, 0xff60],
+  [0xffe0, 0xffe6], [0x1f300, 0x1f64f], [0x1f900, 0x1f9ff], [0x20000, 0x3fffd],
+];
 function displayWidth(s: string) {
   let w = 0;
-  for (const ch of s) w += /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\uFF01-\uFF60\uFFE0-\uFFE6]/u.test(ch) ? 2 : 1;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    w += wideRanges.some(([a, b]) => cp >= a && cp <= b) ? 2 : 1;
+  }
   return w;
 }
 
@@ -506,7 +518,7 @@ class TableWidget extends WidgetType {
     if (e.isComposing || e.keyCode === 229 || this.composing || performance.now() - this.composedAt < 80) return;
     const rows = this.data.rows.length;
     const cols = this.width();
-    const mod = e.metaKey || e.ctrlKey;
+    const mod = isMac ? e.metaKey : e.ctrlKey;
     const go = (row: number, col: number, at: "start" | "end") => {
       const el = wrap.querySelector<HTMLElement>(`.cm-md-cell[data-row="${row}"][data-col="${col}"]`);
       if (!el) return;
@@ -636,7 +648,12 @@ class TableWidget extends WidgetType {
         for (const row of lines) {
           const cell = row.cells[c];
           if (!cell) continue;
-          if (row.cells.length === 1) {
+          if (row.pipes === 1 && row.cells.length === 2) {
+            // Removing this row's only pipe would leave plain text (a header and delimiter
+            // without pipes read as a setext heading), so rewrite it as a one-cell piped row.
+            const keep = row.cells[1 - c];
+            changes.push({ from: row.from, to: row.to, insert: `| ${keep.text} |` });
+          } else if (row.cells.length === 1) {
             // Empty the row's only cell but keep a pipe, or a pipe-less row would become a blank
             // line and end the table.
             if (row.lastPipe === null) changes.push({ from: row.from, to: row.to, insert: emptyRow(1) });
