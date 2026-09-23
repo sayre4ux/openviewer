@@ -436,37 +436,30 @@ body {
 #editor .cm-md-table-wrap {
   position: relative;
 }
-/* Tables inside a blockquote or list item take the container's bar or indent. */
-#editor .cm-md-table-wrap.is-quoted {
+/* Tables inside blockquotes and list items: one nested box per container, in source order. */
+#editor .cm-md-table-quote {
   margin-left: 2em;
   padding-left: 1em;
   border-left: 5px solid var(--quote-bar);
 }
-#editor .cm-md-table-wrap.is-quoted .cm-md-table {
+#editor .cm-md-table-quote .cm-md-table {
   font-style: italic;
   color: var(--muted);
 }
-#editor .cm-md-table-wrap.is-listed {
-  --list-indent: calc(var(--list-depth) * (1.5em + 30px));
-  margin-left: var(--list-indent);
-}
-/* A table in a list inside a quote: the bar stays at the quote, the list indent goes inside it. */
-#editor .cm-md-table-wrap.is-quoted.is-listed {
-  margin-left: 2em;
-  padding-left: calc(1em + var(--list-indent));
+#editor .cm-md-table-list {
+  position: relative;
+  margin-left: calc(1.5em + 30px);
 }
 #editor .cm-md-table-marker {
   position: absolute;
   left: -30px;
-  top: 0.5em;
+  top: 0.25em; /* the header cell's top padding, so the bullet sits on the header text line */
+  line-height: var(--line);
   box-sizing: border-box;
   width: 30px;
   padding-right: 0.7em;
   text-align: right;
   user-select: none;
-}
-#editor .cm-md-table-wrap.is-quoted.is-listed .cm-md-table-marker {
-  left: calc(1em + var(--list-indent) - 30px);
 }
 #editor .cm-md-cell {
   outline: none;

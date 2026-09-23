@@ -41,8 +41,7 @@ interface TableData {
   rows: Row[]; // header first, then body rows
   delim: Row; // the |---| row; its cells hold the dash specs
   align: Align[];
-  quote: number; // container depth
-  list: number;
+  containers: ("quote" | "list")[]; // enclosing blockquotes and list items, outermost first
   marker: string | null; // list bullet on the header line, when the table starts a list item
   prefix: string; // the delimiter line's container prefix, copied into new rows
 }
@@ -108,11 +107,10 @@ function readTable(state: EditorState, table: SyntaxNode): TableData | null {
   }
   if (!delim || rows.length === 0 || rows[0].cells.length === 0) return null;
 
-  let quote = 0;
-  let list = 0;
+  const containers: TableData["containers"] = [];
   for (let p = table.parent; p; p = p.parent) {
-    if (p.name === "Blockquote") quote++;
-    else if (p.name === "ListItem") list++;
+    if (p.name === "Blockquote") containers.unshift("quote");
+    else if (p.name === "ListItem") containers.unshift("list");
   }
   let marker: string | null = null;
   const item = table.parent?.name === "ListItem" ? table.parent : null;
@@ -127,8 +125,7 @@ function readTable(state: EditorState, table: SyntaxNode): TableData | null {
     rows,
     delim,
     align: delim.cells.map((c) => alignment(c.text)),
-    quote,
-    list,
+    containers,
     marker,
     prefix: doc.sliceString(delim.lineFrom, delim.from),
   };
@@ -158,10 +155,12 @@ const wideRanges: [number, number][] = [
   [0xa000, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe30, 0xfe4f], [0xff00, 0xff60],
   [0xffe0, 0xffe6], [0x1f300, 0x1f64f], [0x1f900, 0x1f9ff], [0x20000, 0x3fffd],
 ];
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+// Measured per visible character, so an emoji with a skin tone or joiner counts once.
 function displayWidth(s: string) {
   let w = 0;
-  for (const ch of s) {
-    const cp = ch.codePointAt(0)!;
+  for (const { segment } of graphemes.segment(s)) {
+    const cp = segment.codePointAt(0)!;
     w += wideRanges.some(([a, b]) => cp >= a && cp <= b) ? 2 : 1;
   }
   return w;
@@ -320,7 +319,7 @@ class TableWidget extends WidgetType {
 
   private shape() {
     const d = this.data;
-    return `${d.rows.length}x${this.width()}:${d.align.join(",")}:${d.quote},${d.list},${d.marker ?? ""}`;
+    return `${d.rows.length}x${this.width()}:${d.align.join(",")}:${d.containers.join(">")}:${d.marker ?? ""}`;
   }
 
   toDOM(view: EditorView) {
@@ -328,19 +327,22 @@ class TableWidget extends WidgetType {
     const wrap = document.createElement("div");
     wrap.className = "cm-md-table-wrap";
     wrap.dataset.shape = this.shape();
-    // Inside a quote or list the table takes that container's bar or indent.
-    if (d.quote) wrap.classList.add("is-quoted");
-    if (d.list) {
-      wrap.classList.add("is-listed");
-      wrap.style.setProperty("--list-depth", String(d.list));
+    wrap.appendChild(this.toolbar(view, wrap));
+    // One nested box per enclosing quote or list item, in source order, so the quote bars and
+    // list indents compose the way they do for the surrounding text.
+    let inner: HTMLElement = wrap;
+    for (const kind of d.containers) {
+      const box = document.createElement("div");
+      box.className = kind === "quote" ? "cm-md-table-quote" : "cm-md-table-list";
+      inner.appendChild(box);
+      inner = box;
     }
     if (d.marker) {
       const marker = document.createElement("span");
       marker.className = "cm-md-table-marker";
       marker.textContent = d.marker;
-      wrap.appendChild(marker);
+      inner.appendChild(marker);
     }
-    wrap.appendChild(this.toolbar(view, wrap));
     const table = document.createElement("table");
     table.className = "cm-md-table";
     const columns = this.width();
@@ -364,7 +366,7 @@ class TableWidget extends WidgetType {
       if (r === 0) table.createTHead().appendChild(tr);
       else (table.tBodies[0] ?? table.createTBody()).appendChild(tr);
     });
-    wrap.appendChild(table);
+    inner.appendChild(table);
     wrap.addEventListener("focusin", () => wrap.classList.add("is-editing"));
     wrap.addEventListener("focusout", (e) => {
       if (!wrap.contains(e.relatedTarget as Node | null)) wrap.classList.remove("is-editing");
@@ -686,7 +688,7 @@ class TableWidget extends WidgetType {
         break;
       case "delete-table": {
         // Keep the header line's container prefix (`> `, a list bullet) so the container survives.
-        const from = t.quote || t.list ? t.rows[0].from : t.from;
+        const from = t.containers.length ? t.rows[0].from : t.from;
         view.dispatch({ changes: { from, to: t.to }, selection: { anchor: from }, userEvent: "delete" });
         view.focus();
         return;

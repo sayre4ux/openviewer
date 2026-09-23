@@ -220,15 +220,24 @@ await load("| 名 |\n|---|\n| 漢、 |\n| abcd |\n"); await settle();
 await cell(1, 0).click(); await tool("Tidy"); await settle();
 check("tidy measures CJK punctuation", (await text()) === "| 名   |\n|------|\n| 漢、 |\n| abcd |\n", JSON.stringify(await text()));
 
-// A table in a list inside a quote renders with the bar outside the list indent.
-await load("> - | a | b |\n>   |---|---|\n>   | 1 | 2 |\n"); await settle();
-const nestedBox = await page.evaluate(() => {
-  const w = document.querySelector(".cm-md-table-wrap");
-  const t = w?.querySelector("table");
-  return w && t ? { classes: w.className, gap: Math.round(t.getBoundingClientRect().left - w.getBoundingClientRect().left) } : null;
+// Container boxes nest in source order: quote>list and list>quote both compose.
+const nesting = () => page.evaluate(() => {
+  const names = [];
+  for (let el = document.querySelector(".cm-md-table")?.parentElement; el && !el.classList.contains("cm-md-table-wrap"); el = el.parentElement) names.unshift(el.className);
+  return names.join(">");
 });
-check("quote+list table composes indent", !!nestedBox && nestedBox.classes.includes("is-quoted") && nestedBox.classes.includes("is-listed") && nestedBox.gap > 40, JSON.stringify(nestedBox));
+await load("- > | a | b |\n  > |---|---|\n  > | 1 | 2 |\n"); await settle();
+check("list > quote nesting", (await nesting()) === "cm-md-table-list>cm-md-table-quote", await nesting());
+await load("> > | a | b |\n> > |---|---|\n> > | 1 | 2 |\n"); await settle();
+check("two quote bars", (await nesting()) === "cm-md-table-quote>cm-md-table-quote", await nesting());
+await load("> - | a | b |\n>   |---|---|\n>   | 1 | 2 |\n"); await settle();
+check("quote > list nesting", (await nesting()) === "cm-md-table-quote>cm-md-table-list", await nesting());
 await page.screenshot({ path: `${out}/t6-quote-list-table.png`, clip: { x: 0, y: 0, width: 1100, height: 260 } });
+
+// Tidy measures an emoji with a skin tone as one two-column character.
+await load("| x |\n|---|\n| 👍🏻 |\n| ab |\n"); await settle();
+await cell(1, 0).click(); await tool("Tidy"); await settle();
+check("tidy measures emoji graphemes", (await text()) === "| x   |\n|-----|\n| 👍🏻  |\n| ab  |\n", JSON.stringify(await text()));
 
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
