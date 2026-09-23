@@ -88,15 +88,29 @@ fn image_root(document: &Path, home: Option<&Path>) -> Option<PathBuf> {
   })
 }
 
-// A real repository: a `.git` folder with a HEAD file, or a `.git` file pointing at one (worktrees,
-// submodules). A stray `.git` entry, e.g. from an extracted archive, doesn't widen the image root.
+// A real repository: a `.git` folder whose HEAD looks like git's (a `ref:` line or a commit hash), or a
+// `.git` file whose `gitdir:` points at such a folder (worktrees, submodules). A stray `.git` entry, e.g.
+// from an extracted archive, doesn't widen the image root.
 fn is_git_repository(dir: &Path) -> bool {
   let git = dir.join(".git");
   match fs::symlink_metadata(&git) {
-    Ok(meta) if meta.is_dir() => git.join("HEAD").is_file(),
-    Ok(meta) if meta.is_file() && meta.len() < 4096 => fs::read_to_string(&git).is_ok_and(|t| t.starts_with("gitdir:")),
+    Ok(meta) if meta.is_dir() => is_git_dir(&git),
+    Ok(meta) if meta.is_file() && meta.len() < 4096 => fs::read_to_string(&git).ok()
+      .and_then(|t| t.strip_prefix("gitdir:").map(|p| p.trim().to_owned()))
+      .is_some_and(|p| is_git_dir(&dir.join(p))),
     _ => false,
   }
+}
+
+fn is_git_dir(git: &Path) -> bool {
+  let head = git.join("HEAD");
+  let looks_like_head = |t: &str| {
+    let t = t.trim();
+    t.starts_with("ref: refs/") || ((t.len() == 40 || t.len() == 64) && t.chars().all(|c| c.is_ascii_hexdigit()))
+  };
+  fs::metadata(&head).is_ok_and(|m| m.is_file() && m.len() < 1024)
+    && fs::read_to_string(&head).is_ok_and(|t| looks_like_head(&t))
+    && git.join("objects").is_dir()
 }
 
 // A local image the document may show: inside its image root after resolving symlinks, a regular file,
@@ -460,18 +474,14 @@ pub fn run() {
       }
       tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
         let app = window.app_handle();
-        // Tauri adds every dropped file and folder to the asset scope. A dropped file only becomes
-        // displayable as an image (page script can't read its pixels across origins), but a dropped folder
-        // would open its whole tree, so take that back. A forbid lasts for the session and wins over
-        // resolve_image_path's allows, so folders holding an open document are left alone.
-        // DECISION: dropped single files stay in the scope; they are what the user chose to drop.
+        // Tauri adds every dropped file and folder (recursively) to the asset scope before this runs.
+        // Take all of it back: documents are read through read_document, and images are allowed one at
+        // a time by resolve_image_path.
+        // DECISION: a forbid lasts for the session and beats later allows, so dropping a folder blocks its
+        // images until restart. Safer than leaving a dropped `/` or home folder readable.
         let scope = app.asset_protocol_scope();
-        let documents: Vec<PathBuf> = app.state::<AuthorizedDocuments>().0.lock().unwrap().iter().cloned().collect();
-        for dir in paths.iter().filter(|p| p.is_dir()) {
-          let canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
-          if !documents.iter().any(|d| d.starts_with(&canonical)) {
-            let _ = scope.forbid_directory(dir, true);
-          }
+        for path in paths {
+          let _ = if path.is_dir() { scope.forbid_directory(path, true) } else { scope.forbid_file(path) };
         }
         if window.label() != "preferences" {
           let allowed: Vec<_> = droppable_documents(paths).into_iter().filter_map(|p| authorize_document(app, p, false).ok()).collect();
@@ -663,7 +673,7 @@ mod tests {
   fn images_may_come_from_the_documents_repository() {
     let dir = fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("openviewer-repo-{}-{}", std::process::id(), TEMP_ID.fetch_add(1, Ordering::Relaxed)));
     let repo = dir.join("project");
-    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::create_dir_all(repo.join(".git/objects")).unwrap();
     fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     fs::create_dir_all(repo.join("docs")).unwrap();
     fs::create_dir_all(repo.join("images")).unwrap();
@@ -688,6 +698,13 @@ mod tests {
     fs::create_dir_all(stray.join("sub")).unwrap();
     fs::write(stray.join("sub/page.md"), "").unwrap();
     fs::write(stray.join("pic.png"), "png").unwrap();
+    assert_eq!(scoped_image_path(&stray.join("sub/page.md"), Path::new("../pic.png"), None), None);
+    // Neither is a HEAD file with other content, nor a `gitdir:` pointer that leads nowhere.
+    fs::write(stray.join(".git/HEAD"), "anything").unwrap();
+    fs::create_dir_all(stray.join(".git/objects")).unwrap();
+    assert_eq!(scoped_image_path(&stray.join("sub/page.md"), Path::new("../pic.png"), None), None);
+    fs::remove_dir_all(stray.join(".git")).unwrap();
+    fs::write(stray.join(".git"), "gitdir: /nonexistent/place\n").unwrap();
     assert_eq!(scoped_image_path(&stray.join("sub/page.md"), Path::new("../pic.png"), None), None);
     let _ = fs::remove_dir_all(dir);
   }
