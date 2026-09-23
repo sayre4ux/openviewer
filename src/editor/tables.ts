@@ -1,4 +1,4 @@
-import { redo, undo } from "@codemirror/commands";
+import { isolateHistory, redo, undo } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, Prec, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "@codemirror/view";
@@ -24,6 +24,7 @@ interface TableData {
   from: number;
   to: number;
   rows: Cell[][]; // header first; the delimiter row is not included
+  rowEnds: { lastPipe: number | null; to: number; trailingPipe: boolean }[];
   align: Align[];
 }
 
@@ -65,15 +66,22 @@ function readTable(state: EditorState, table: SyntaxNode): TableData | null {
   if (table.parent?.name !== "Document") return null;
   const doc = state.doc;
   const rows: Cell[][] = [];
+  const rowEnds: TableData["rowEnds"] = [];
   let align: Align[] = [];
   for (let c = table.firstChild; c; c = c.nextSibling) {
-    if (c.name === "TableHeader" || c.name === "TableRow") rows.push(rowCells(doc, c));
+    if (c.name === "TableHeader" || c.name === "TableRow") {
+      rows.push(rowCells(doc, c));
+      const pipes = c.getChildren("TableDelimiter");
+      const lastPipe = pipes.length ? pipes[pipes.length - 1].from : null;
+      const trailingPipe = lastPipe !== null && doc.sliceString(lastPipe + 1, c.to).trim() === "";
+      rowEnds.push({ lastPipe, to: c.to, trailingPipe });
+    }
     else if (c.name === "TableDelimiter") {
       align = doc.sliceString(c.from, c.to).split("|").map((p) => p.trim()).filter(Boolean).map(alignment);
     }
   }
   if (rows.length === 0 || rows[0].length === 0) return null;
-  return { from: doc.lineAt(table.from).from, to: doc.lineAt(table.to).to, rows, align };
+  return { from: doc.lineAt(table.from).from, to: doc.lineAt(table.to).to, rows, rowEnds, align };
 }
 
 function tableAt(state: EditorState, pos: number): TableData | null {
@@ -178,6 +186,20 @@ function renderedToRaw(raw: string, offset: number) {
     }
   }
   return raw.length;
+}
+
+// Select characters [from, to) of a cell holding a single text node.
+function selectText(el: HTMLElement, from: number, to: number) {
+  el.focus();
+  const text = el.firstChild;
+  if (!text || text.nodeType !== Node.TEXT_NODE) return placeCaret(el, "end");
+  const max = text.textContent?.length ?? 0;
+  const range = document.createRange();
+  range.setStart(text, Math.max(0, Math.min(from, max)));
+  range.setEnd(text, Math.max(0, Math.min(to, max)));
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
 }
 
 function caretOffset(el: HTMLElement): { start: number; end: number } {
@@ -329,23 +351,63 @@ class TableWidget extends WidgetType {
       clickOffset = pre.toString().length;
       cell.focus({ preventScroll: true });
     });
-    cell.addEventListener("input", () => {
-      const table = this.current(view, wrap);
-      const target = table?.rows[row()]?.[col()];
-      if (!table || !target) return;
-      const text = escapePipes(cell.textContent ?? "");
-      cell.dataset.raw = text;
+    cell.addEventListener("input", () => this.commit(view, wrap, cell, false));
+    cell.addEventListener("keydown", (e) => this.onKey(e, view, wrap, row(), col(), cell));
+  }
+
+  // Write the cell's current text into the document. Typing merges into one undo step per
+  // burst; `isolate` makes an edit (such as ⌘B) its own undo step.
+  private commit(view: EditorView, wrap: HTMLElement, cell: HTMLElement, isolate: boolean) {
+    const table = this.current(view, wrap);
+    const r = Number(cell.dataset.row);
+    const c = Number(cell.dataset.col);
+    const cells = table?.rows[r];
+    if (!table || !cells) return;
+    const text = escapePipes(cell.textContent ?? "").trimEnd();
+    cell.dataset.raw = text;
+    const target = cells[c];
+    let change;
+    if (target) {
       // Rewrite from the cell text to the closing pipe, so trailing spaces typed and later
       // continued don't pile up as padding. The edited cell ends with one space of padding.
-      const change = target.text
-        ? { from: target.from, to: target.segTo, insert: `${text.trimEnd()} ` }
-        : { from: target.segFrom, to: target.segTo, insert: ` ${text.trimEnd()} ` };
-      view.dispatch({ changes: change, userEvent: "input.type" });
-      view.requestMeasure();
-      // Typewriter mode can't see the caret here (focus is in the cell), so center the cell.
-      if (view.dom.classList.contains("ov-typewriter")) cell.scrollIntoView({ block: "center" });
+      change = target.text
+        ? { from: target.from, to: target.segTo, insert: `${text} ` }
+        : { from: target.segFrom, to: target.segTo, insert: ` ${text} ` };
+    } else {
+      // A row shorter than the header shows empty cells that don't exist in the source yet:
+      // append the missing ones through this column.
+      const end = table.rowEnds[r];
+      let insert = "";
+      for (let j = cells.length; j <= c; j++) {
+        const content = j === c ? text : "";
+        insert += end.trailingPipe ? ` ${content} |` : ` | ${content}`;
+      }
+      change = { from: end.trailingPipe ? end.lastPipe! + 1 : end.to, insert };
+    }
+    view.dispatch({
+      changes: change,
+      userEvent: isolate ? "input" : "input.type",
+      annotations: isolate ? isolateHistory.of("full") : undefined,
     });
-    cell.addEventListener("keydown", (e) => this.onKey(e, view, wrap, row(), col(), cell));
+    view.requestMeasure();
+    // Typewriter mode can't see the caret here (focus is in the cell), so center the cell.
+    if (view.dom.classList.contains("ov-typewriter")) cell.scrollIntoView({ block: "center" });
+  }
+
+  // ⌘B / ⌘I / ⌘E: wrap the selection in the cell with a Markdown marker, or unwrap it when the
+  // marker already surrounds it (the same rule as the editor's own ⌘B).
+  private toggleFormat(view: EditorView, wrap: HTMLElement, cell: HTMLElement, marker: string) {
+    const text = cell.textContent ?? "";
+    const { start, end } = caretOffset(cell);
+    const n = marker.length;
+    const wrapped = text.slice(start - n, start) === marker && text.slice(end, end + n) === marker;
+    const next = wrapped
+      ? text.slice(0, start - n) + text.slice(start, end) + text.slice(end + n)
+      : text.slice(0, start) + marker + text.slice(start, end) + marker + text.slice(end);
+    const shift = wrapped ? -n : n;
+    cell.textContent = next;
+    selectText(cell, start + shift, end + shift);
+    this.commit(view, wrap, cell, true);
   }
 
   private onKey(e: KeyboardEvent, view: EditorView, wrap: HTMLElement, r: number, c: number, cell: HTMLElement) {
@@ -369,8 +431,11 @@ class TableWidget extends WidgetType {
     // of this cell into the surrounding editor or the next cell.
     const toStart = (mod && (e.key === "ArrowLeft" || e.key === "ArrowUp")) || e.key === "Home";
     const toEnd = (mod && (e.key === "ArrowRight" || e.key === "ArrowDown")) || e.key === "End";
+    const format = mod && !e.shiftKey && !e.altKey ? { b: "**", i: "*", e: "`" }[e.key.toLowerCase()] : undefined;
     if ((toStart || toEnd) && !e.shiftKey) {
       placeCaret(cell, toStart ? "start" : "end");
+    } else if (format) {
+      this.toggleFormat(view, wrap, cell, format);
     } else if (mod && e.key.toLowerCase() === "a") {
       const range = document.createRange();
       range.selectNodeContents(cell);

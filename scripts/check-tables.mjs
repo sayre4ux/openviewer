@@ -137,6 +137,27 @@ await page.evaluate(() => window.__ov.view.focus());
 await page.evaluate(() => window.__ov.commands["insert-table"]()); await settle(300);
 check("insert table into empty document", (await text()).startsWith("| Column 1 |"), JSON.stringify(await text()));
 
+// --- Short rows and formatting keys ---
+// Typing into a cell that a short row doesn't have yet appends the missing cells.
+await load("| A | B | C |\n|---|---|---|\n| 1 |\n"); await settle();
+await cell(1, 2).click(); await page.keyboard.type("x"); await settle();
+check("type into missing cell (piped row)", (await text()) === "| A | B | C |\n|---|---|---|\n| 1 |  | x |\n", JSON.stringify(await text()));
+await load("A | B | C\n--|--|--\n1\n"); await settle();
+await cell(1, 2).click(); await page.keyboard.type("x"); await settle();
+check("type into missing cell (no outer pipes)", (await text()) === "A | B | C\n--|--|--\n1 |  | x\n", JSON.stringify(await text()));
+
+// ⌘B wraps the selection, ⌘B again unwraps it, and each is one undo step.
+await load("| A |\n|---|\n| word |\n"); await settle();
+await cell(1, 0).click(); await page.keyboard.press(`${mod}+a`); await page.keyboard.press(`${mod}+b`); await settle();
+check("cmd-b wraps selection", (await tableSrc()).split("\n")[2] === "| **word** |", (await tableSrc()).split("\n")[2]);
+await page.keyboard.press(`${mod}+b`); await settle();
+check("cmd-b again unwraps", (await tableSrc()).split("\n")[2] === "| word |", (await tableSrc()).split("\n")[2]);
+await page.keyboard.press(`${mod}+i`); await page.keyboard.type("!"); await settle();
+check("cmd-i wraps and keeps typing inside", (await tableSrc()).split("\n")[2] === "| *!* |", (await tableSrc()).split("\n")[2]);
+await page.keyboard.press(`${mod}+z`); await settle();
+await page.keyboard.press(`${mod}+z`); await settle();
+check("format is its own undo step", (await tableSrc()).split("\n")[2] === "| word |", (await tableSrc()).split("\n")[2]);
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);
