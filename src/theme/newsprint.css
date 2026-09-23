@@ -62,8 +62,75 @@ body {
   color: var(--ink);
 }
 
-#editor {
+#app {
+  display: flex;
   height: 100%;
+}
+#editor {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+/* ---------- Outline sidebar (Newsprint's pinned outline: dashed rule, serif items) ---------- */
+
+#outline {
+  flex: none;
+  width: 250px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding: 56px 12px 24px 20px;
+  border-right: 1px dashed var(--rule);
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.35;
+}
+#outline[hidden] {
+  display: none;
+}
+.ov-outline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ov-outline-item {
+  padding: 4px 8px 4px calc(8px + (var(--level) - 1) * 14px);
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-outline-item:hover {
+  background: var(--code-bg);
+}
+.ov-outline-item.is-active {
+  font-weight: 700;
+}
+.ov-outline-empty {
+  padding: 4px 8px;
+  color: var(--meta);
+  font-style: italic;
+}
+
+/* ---------- Word count ---------- */
+
+#status {
+  position: fixed;
+  right: 14px;
+  bottom: 10px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(243, 242, 238, 0.9);
+  color: var(--meta);
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  pointer-events: auto;
+}
+#status[hidden] {
+  display: none;
 }
 
 ::selection {
@@ -413,6 +480,22 @@ body {
 #editor .cm-md-table-tools button:hover {
   background: var(--code-bg);
   color: var(--ink);
+}
+
+/* ---------- Focus mode (F8) and typewriter mode (F9) ---------- */
+
+#editor .ov-focus .cm-line,
+#editor .ov-focus .cm-md-table-wrap {
+  opacity: 0.28;
+  transition: opacity 0.15s ease;
+}
+#editor .ov-focus .cm-line.cm-focus-current,
+#editor .ov-focus .cm-md-table-wrap.is-editing {
+  opacity: 1;
+}
+#editor .ov-typewriter .cm-content {
+  padding-top: 45vh;
+  padding-bottom: 50vh;
 }
 
 /* ---------- Source mode (⌘/) ---------- */

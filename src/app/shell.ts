@@ -15,7 +15,21 @@ const SAVE = "Save";
 const DISCARD = "Don’t Save";
 const filters = [{ name: "Markdown and text", extensions: ["md", "markdown", "mdown", "txt"] }];
 
-export async function startShell(doc: ShellDocument, toggleSource: () => void, undo: () => void, redo: () => void): Promise<void> {
+// View-menu checkmarks, mirrored from the focused window's modes.
+export interface ViewChecks {
+  source: boolean;
+  outline: boolean;
+  focus: boolean;
+  typewriter: boolean;
+  wordCount: boolean;
+}
+
+export async function startShell(
+  doc: ShellDocument,
+  commands: Record<string, () => void>,
+  checks: () => ViewChecks,
+  onModesChanged: (notify: () => void) => void,
+): Promise<void> {
   const invoke = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   if (!invoke) return;
 
@@ -95,16 +109,22 @@ export async function startShell(doc: ShellDocument, toggleSource: () => void, u
       case "open": await openDialog(); break;
       case "save": await save(); break;
       case "save-as": await saveAs(); break;
-      case "undo": undo(); break;
-      case "redo": redo(); break;
-      case "source-mode": toggleSource(); break;
       case "quit": {
         // DECISION: each window handles its own prompt, so Cancel keeps that document open.
         await emit("quit-request");
         break;
       }
+      default:
+        commands[id]?.();
     }
   });
+  // The macOS menu is shared by all windows, so its checkmarks follow whichever window is focused.
+  const syncMenu = () => void call("sync_view_menu", { checks: checks() });
+  onModesChanged(syncMenu);
+  await win.onFocusChanged(({ payload: focused }) => {
+    if (focused) syncMenu();
+  });
+  syncMenu();
   let pendingOpen = Promise.resolve();
   await win.listen<string>("open-path", ({ payload: target }) => {
     pendingOpen = pendingOpen.then(() => openPath(target));

@@ -1,5 +1,5 @@
 use std::{fs::{self, OpenOptions}, io::Write, path::Path, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex}};
-use tauri::{menu::{Menu, MenuItemBuilder, SubmenuBuilder}, webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
+use tauri::{menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, SubmenuBuilder}, webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -78,6 +78,40 @@ fn item<R: Runtime, M: Manager<R>>(manager: &M, id: &str, text: &str, key: &str)
   MenuItemBuilder::with_id(id, text).accelerator(key).build(manager)
 }
 
+fn check<R: Runtime, M: Manager<R>>(manager: &M, id: &str, text: &str, key: Option<&str>) -> tauri::Result<tauri::menu::CheckMenuItem<R>> {
+  let builder = CheckMenuItemBuilder::with_id(id, text).checked(false);
+  match key {
+    Some(key) => builder.accelerator(key).build(manager),
+    None => builder.build(manager),
+  }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewChecks { source: bool, outline: bool, focus: bool, typewriter: bool, word_count: bool }
+
+// The menu bar is shared by every window; the focused window reports its modes here.
+#[tauri::command]
+fn sync_view_menu<R: Runtime>(app: tauri::AppHandle<R>, checks: ViewChecks) -> Result<(), String> {
+  let Some(menu) = app.menu() else { return Ok(()) };
+  let wanted = [
+    ("source-mode", checks.source),
+    ("outline", checks.outline),
+    ("focus-mode", checks.focus),
+    ("typewriter-mode", checks.typewriter),
+    ("word-count", checks.word_count),
+  ];
+  for entry in menu.items().map_err(|e| e.to_string())? {
+    let Some(submenu) = entry.as_submenu() else { continue };
+    for (id, on) in wanted {
+      if let Some(item) = submenu.get(id).and_then(|i| i.as_check_menuitem().cloned()) {
+        item.set_checked(on).map_err(|e| e.to_string())?;
+      }
+    }
+  }
+  Ok(())
+}
+
 fn app_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> {
   let app = SubmenuBuilder::new(manager, "OpenViewer")
     .about(Some(tauri::menu::AboutMetadata { name: Some("OpenViewer".into()), ..Default::default() }))
@@ -92,9 +126,14 @@ fn app_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> {
   let edit = SubmenuBuilder::new(manager, "Edit")
     .item(&item(manager, "undo", "Undo", "CmdOrCtrl+Z")?)
     .item(&item(manager, "redo", "Redo", "CmdOrCtrl+Shift+Z")?).separator()
-    .cut().copy().paste().select_all().build()?;
+    .cut().copy().paste().select_all().separator()
+    .item(&item(manager, "insert-table", "Insert Table", "CmdOrCtrl+Alt+T")?).build()?;
   let view = SubmenuBuilder::new(manager, "View")
-    .item(&item(manager, "source-mode", "Source Mode", "CmdOrCtrl+/")?).build()?;
+    .item(&check(manager, "source-mode", "Source Mode", Some("CmdOrCtrl+/"))?).separator()
+    .item(&check(manager, "outline", "Outline", Some("CmdOrCtrl+Shift+L"))?).separator()
+    .item(&check(manager, "focus-mode", "Focus Mode", Some("F8"))?)
+    .item(&check(manager, "typewriter-mode", "Typewriter Mode", Some("F9"))?).separator()
+    .item(&check(manager, "word-count", "Word Count", None)?).build()?;
   Menu::with_items(manager, &[&app, &file, &edit, &view])
 }
 
@@ -117,7 +156,7 @@ pub fn run() {
         let _ = app.emit_to(window.label(), "menu", event.id().as_ref());
       }
     })
-    .invoke_handler(tauri::generate_handler![read_document, write_document, create_document_window, frontend_ready])
+    .invoke_handler(tauri::generate_handler![read_document, write_document, create_document_window, frontend_ready, sync_view_menu])
     .build(tauri::generate_context!())
     .expect("error while building OpenViewer")
     .run(|app, event| {
