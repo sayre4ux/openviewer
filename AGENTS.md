@@ -54,9 +54,22 @@ cd src-tauri && cargo test
    or the table stops parsing. Tables inside quotes and lists keep each line's prefix.
 5. **Windows share one menu bar.** Send events to one window with `emit_to`, not `emit` (which goes to
    every window). View checkmarks are synced from the focused window through `sync_view_menu`.
-6. **Security.** Never put document text into `innerHTML` without escaping (see `renderInline` in
-   `tables.ts`). Keep the CSP in `tauri.conf.json` strict; `scripts/check-csp.mjs` must pass. Keep
-   `src-tauri/capabilities/documents.json` and `preferences.json` to the permissions actually used.
+6. **Security.** A Markdown file is untrusted input.
+   - Never put document text into `innerHTML` without escaping (see `renderInline` in `tables.ts`).
+     Keep the CSP in `tauri.conf.json` strict; `scripts/check-csp.mjs` must pass.
+   - File access is by user choice only: `read_document`, `write_document`, and
+     `create_document_window` accept only paths authorized in Rust by the Open or Save As dialog
+     (`open_dialog` / `save_dialog`), a drop, or Finder's Open With. Paths are compared canonically,
+     reads verify the opened file with `F_GETPATH`, and writes go through a verified directory handle
+     (`openat`/`renameat`), so a symlink swapped in later is never followed.
+   - The asset protocol starts empty. `resolve_image_path` allows one image at a time: inside the
+     document's git repository (or its folder), a regular image file, at most 32 MB. Drops are
+     forbidden in the asset scope again because Tauri allows them automatically.
+   - Images from loopback, private, and link-local hosts are blocked (`imageUrlAllowed`).
+   - Permissions are per window: `capabilities/documents.json` and `capabilities/preferences.json`,
+     with app commands declared in `build.rs`. A new command needs an entry in both places.
+   - Opening refuses non-regular files and files over 64 MB; `keybindings.json` over 1 MB is refused
+     and is never written through a symlink.
 
 ## Gotchas
 

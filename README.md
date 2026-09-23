@@ -44,6 +44,13 @@ npm run test:all                # the same, plus WebKit (the engine the app uses
 
 The browser suites run the editor in a plain browser against `npm run dev`.
 
+## Security
+
+OpenViewer treats every Markdown file as untrusted. The app can read and write only files you chose
+(Open, Save As, drag and drop, or Open With), local images load only from the document's folder or git
+repository, images from your local network are blocked, and a strict Content-Security-Policy applies.
+Images from the internet still load when a document opens.
+
 ## How it works
 
 OpenViewer is a [Tauri 2](https://tauri.app) app. The editor is
