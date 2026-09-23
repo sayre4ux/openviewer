@@ -9,6 +9,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { CodeLanguageWidget } from "./codeLanguage";
 import { tables } from "./tables";
 
 // Typora-style live rendering over plain Markdown text. The document is never rewritten;
@@ -273,26 +274,33 @@ function buildDecorations(view: EditorView): DecorationSet {
       }
 
       if (name === "FencedCode" || name === "CodeBlock") {
-        const active = touches(state, node.from, node.to);
         const fenced = name === "FencedCode";
-        const closed = fenced && node.lastChild?.name === "CodeMark" && node.lastChild.from > node.firstChild!.to;
+        const openMark = fenced ? node.firstChild : null;
+        const closed = fenced && node.lastChild?.name === "CodeMark" && node.lastChild.from > openMark!.to;
+        const open = doc.lineAt(node.from);
+        const close = doc.lineAt(node.to);
+        // Each fence line reveals its own raw text only while the caret is on it.
+        const openActive = fenced && lineTouched(state, open.from);
+        const closeActive = closed && lineTouched(state, close.from);
         addLines(state, out, node.from, node.to, (_n, first, last) => {
           const classes = ["cm-md-fence"];
           if (first) classes.push("cm-md-fence-first");
           if (last) classes.push("cm-md-fence-last");
-          if (fenced && (first || (last && closed))) {
-            classes.push("cm-md-fence-delim");
-            if (!active) classes.push("is-hidden");
-          }
+          if (fenced && first) classes.push("cm-md-fence-head", openActive ? "is-active" : "is-rendered");
+          if (closed && last) classes.push("cm-md-fence-tail", closeActive ? "is-active" : "is-hidden");
           return Decoration.line({ class: classes.join(" ") });
         });
-        if (fenced) {
-          const open = doc.lineAt(node.from);
-          out.push((active ? revealedMark : hide).range(open.from, open.to));
-          if (closed) {
-            const close = doc.lineAt(node.to);
-            if (close.to > close.from) out.push((active ? revealedMark : hide).range(close.from, close.to));
+        if (fenced && openMark) {
+          if (openActive) {
+            out.push(revealedMark.range(open.from, open.to));
+          } else {
+            const info = node.getChild("CodeInfo");
+            const infoFrom = info ? info.from : openMark.to;
+            const infoTo = info ? info.to : openMark.to;
+            const widget = new CodeLanguageWidget(doc.sliceString(infoFrom, infoTo), infoFrom, infoTo);
+            out.push(Decoration.replace({ widget }).range(open.from, open.to));
           }
+          if (closed && close.to > close.from) out.push((closeActive ? revealedMark : hide).range(close.from, close.to));
         }
         return false;
       }

@@ -248,23 +248,87 @@ body {
   display: none;
 }
 
-/* ---------- Code blocks: flat gray slab; fence lines become its padding ---------- */
+/* ---------- Code blocks: dark rounded card (after Codex); fence lines become its header/footer ---------- */
 
+:root {
+  --card-bg: #141414;
+  --card-edge: #2c2c2c;
+  --card-ink: #e6e6e6;
+  --card-muted: #8b8b8b;
+  --card-radius: 12px;
+  --card-pad: 18px;
+  --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+/* DECISION: full column width like Codex, instead of Newsprint's 2em indent. */
 #editor .cm-md-fence {
   font-family: var(--mono);
   font-size: 0.875em;
   line-height: 1.714285em;
-  background: var(--code-bg);
-  margin-left: 2em;
-  padding: 0 1ch;
+  background: var(--card-bg);
+  color: var(--card-ink);
+  caret-color: var(--card-ink);
+  padding: 0 var(--card-pad);
+  border-left: 1px solid var(--card-edge);
+  border-right: 1px solid var(--card-edge);
 }
-#editor .cm-md-fence-delim {
-  color: var(--meta);
+#editor .cm-md-fence-first {
+  border-top: 1px solid var(--card-edge);
+  border-top-left-radius: var(--card-radius);
+  border-top-right-radius: var(--card-radius);
+  padding-top: 12px;
 }
-#editor .cm-md-fence-delim.is-hidden {
-  line-height: 0.8em;
-  font-size: 0.875em;
+#editor .cm-md-fence-last {
+  border-bottom: 1px solid var(--card-edge);
+  border-bottom-left-radius: var(--card-radius);
+  border-bottom-right-radius: var(--card-radius);
+  padding-bottom: 12px;
 }
+#editor .cm-md-fence-head {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+#editor .cm-md-fence-head.is-active,
+#editor .cm-md-fence-tail.is-active {
+  color: var(--card-muted);
+}
+#editor .cm-md-fence-tail.is-hidden {
+  line-height: 4px;
+}
+#editor .cm-md-fence .cm-md-mark {
+  color: var(--card-muted);
+}
+#editor .cm-md-fence ::selection {
+  background: rgba(120, 140, 170, 0.45);
+  color: inherit;
+}
+
+#editor .cm-md-lang {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--card-muted);
+  user-select: none;
+}
+#editor .cm-md-lang-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+#editor .cm-md-lang:hover {
+  color: var(--card-ink);
+}
+#editor .cm-md-lang-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+
 #editor .cm-md-raw {
   font-family: var(--mono);
   font-size: 0.875em;
