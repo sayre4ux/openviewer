@@ -271,6 +271,36 @@ body {
   color: var(--muted);
 }
 
+/* ---------- Tables (rendered widget; raw source shows while the caret is inside) ---------- */
+
+#editor .cm-md-table-wrap {
+  padding: 0.25em 0;
+}
+#editor .cm-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 1em;
+  line-height: var(--line);
+  cursor: text;
+}
+#editor .cm-md-table th,
+#editor .cm-md-table td {
+  padding: 0.25em 0.25em 0.25em 0.4em;
+  text-align: left;
+  vertical-align: top;
+}
+#editor .cm-md-table thead {
+  background: var(--code-bg);
+}
+#editor .cm-md-table th {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+#editor .cm-md-table tbody tr:nth-child(even) {
+  background: #e8e7e7;
+}
+
 /* ---------- Source mode (⌘/) ---------- */
 
 #editor .ov-source .cm-content {

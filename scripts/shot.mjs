@@ -33,6 +33,17 @@ await page.screenshot({ path: `${out}/2-middle.png` });
 await scrollTo(100000); await settle();
 await page.screenshot({ path: `${out}/3-bottom.png` });
 
+// Tables render as a widget while the caret is elsewhere; clicking a cell reveals the source.
+await caretAtEnd(); await settle();
+const tableY = await ov(() => { const t = document.querySelector(".cm-md-table"); return t ? t.getBoundingClientRect().top + window.__ov.view.scrollDOM.scrollTop : -1; });
+console.log("table rendered:", tableY >= 0);
+await scrollTo(Math.max(0, tableY - 120)); await settle();
+await page.screenshot({ path: `${out}/2b-table.png`, clip: { x: 0, y: 0, width: 1100, height: 420 } });
+await page.click(".cm-md-table tbody td"); await settle();
+const revealed = await ov(() => !document.querySelector(".cm-md-table") && window.__ov.view.state.doc.lineAt(window.__ov.view.state.selection.main.head).text.startsWith("| Front page"));
+console.log("table click reveals source at cell:", revealed);
+await page.screenshot({ path: `${out}/2c-table-editing.png`, clip: { x: 0, y: 0, width: 1100, height: 420 } });
+
 // 3. Caret inside **PT Serif** reveals its markers.
 await scrollTo(0);
 await ov(() => { const v = window.__ov.view; const i = v.state.doc.toString().indexOf("PT Serif"); v.dispatch({ selection: { anchor: i + 2 } }); v.focus(); });

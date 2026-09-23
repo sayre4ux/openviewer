@@ -19,6 +19,12 @@ Things to check before the evening run:
 1. Lock the front page.
 2. Send plates to the pressroom.
 
+| Desk | Owner | Due |
+|:---|:---:|---:|
+| Front page | `lead` editor | 18:00 |
+| Sports | **night** desk | 21:30 |
+| Letters | *opinion* | 22:00 |
+
 ```html
 <!DOCTYPE html>
 <html>

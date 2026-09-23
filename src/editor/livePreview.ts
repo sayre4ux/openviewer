@@ -9,6 +9,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { tables } from "./tables";
 
 // Typora-style live rendering over plain Markdown text. The document is never rewritten;
 // this plugin only adds decorations: line classes for block styling, mark classes for inline
@@ -355,4 +356,4 @@ const linkClick = EditorView.domEventHandlers({
   },
 });
 
-export const livePreview = [livePreviewPlugin, linkClick];
+export const livePreview = [livePreviewPlugin, linkClick, tables];
