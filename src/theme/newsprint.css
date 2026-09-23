@@ -255,6 +255,22 @@ body {
   max-width: 100%;
   vertical-align: bottom;
 }
+#editor .cm-md-image-blocked {
+  display: inline-block;
+  margin: 0 0.15em;
+  padding: 0 0.4em;
+  font-family: var(--serif);
+  font-size: 0.8em;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--muted);
+  background: var(--code-bg);
+  vertical-align: baseline;
+}
+#editor .cm-md-image-blocked-alt {
+  margin-right: 0.4em;
+}
 
 /* ---------- Blockquote ---------- */
 

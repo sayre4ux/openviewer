@@ -88,6 +88,132 @@ class ImageWidget extends WidgetType {
   }
 }
 
+class BlockedImageWidget extends WidgetType {
+  constructor(readonly alt: string) {
+    super();
+  }
+  eq(other: BlockedImageWidget) {
+    return other.alt === this.alt;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-md-image-blocked";
+    if (this.alt) {
+      const alt = document.createElement("span");
+      alt.className = "cm-md-image-blocked-alt";
+      alt.textContent = this.alt;
+      el.appendChild(alt);
+    }
+    const note = document.createElement("span");
+    note.className = "cm-md-image-blocked-note";
+    note.textContent = "image blocked";
+    el.appendChild(note);
+    return el;
+  }
+}
+
+// https, http (except loopback, private, and link-local hosts), data:image, or a file path.
+// Anything else, including javascript: and protocol-relative URLs, is not loaded.
+export function imageUrlAllowed(raw: string): boolean {
+  const src = raw.trim();
+  if (/^data:image\//i.test(src)) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(src)) {
+    if (!/^https?:\/\//i.test(src)) return false;
+    try {
+      return !isBlockedHost(new URL(src).hostname);
+    } catch {
+      return false;
+    }
+  }
+  // DECISION: "//host/..." is a remote URL with the page's scheme, not a file path.
+  if (src.startsWith("//") || src.startsWith("\\\\")) return false;
+  return src.length > 0;
+}
+
+function isBlockedHost(hostname: string): boolean {
+  let host = hostname.trim().toLowerCase();
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (host.includes(":")) return isPrivateV6(host);
+  const v4 = parseDottedIpv4(host);
+  return v4 !== null && isPrivateV4(v4);
+}
+
+function parseDottedIpv4(host: string): number | null {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  let ip = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const n = Number(part);
+    if (n > 255) return null;
+    ip = ((ip << 8) | n) >>> 0;
+  }
+  return ip;
+}
+
+function isPrivateV4(ip: number): boolean {
+  if (ip === 0) return true; // 0.0.0.0
+  const a = ip >>> 24;
+  const b = (ip >>> 16) & 0xff;
+  if (a === 10 || a === 127) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
+function parseIpv6(host: string): Uint8Array | null {
+  let text = host;
+  const zone = text.indexOf("%");
+  if (zone !== -1) text = text.slice(0, zone);
+  const lastColon = text.lastIndexOf(":");
+  if (lastColon !== -1 && text.slice(lastColon + 1).includes(".")) {
+    const v4 = parseDottedIpv4(text.slice(lastColon + 1));
+    if (v4 === null) return null;
+    text = `${text.slice(0, lastColon + 1)}${(v4 >>> 16).toString(16)}:${(v4 & 0xffff).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const parseSide = (side: string): number[] | null => {
+    if (side === "") return [];
+    const nums: number[] = [];
+    for (const group of side.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+      nums.push(parseInt(group, 16));
+    }
+    return nums;
+  };
+  const left = parseSide(halves[0]);
+  if (!left) return null;
+  const right = halves.length === 2 ? parseSide(halves[1]) : [];
+  if (!right) return null;
+  // "::" has to stand in for at least one group, so 8 explicit groups plus "::" is not an address.
+  if (halves.length === 1 ? left.length !== 8 : left.length + right.length > 7) return null;
+  const groups = [...left, ...Array(8 - left.length - right.length).fill(0), ...right];
+  const out = new Uint8Array(16);
+  for (let i = 0; i < 8; i++) {
+    out[i * 2] = groups[i] >> 8;
+    out[i * 2 + 1] = groups[i] & 0xff;
+  }
+  return out;
+}
+
+function isPrivateV6(host: string): boolean {
+  const bytes = parseIpv6(host);
+  if (!bytes) return false;
+  const mapped = bytes.subarray(0, 10).every((b) => b === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+  if (mapped) {
+    const ip = ((bytes[12] << 24) | (bytes[13] << 16) | (bytes[14] << 8) | bytes[15]) >>> 0;
+    return isPrivateV4(ip);
+  }
+  if (bytes[15] === 1 && bytes.subarray(0, 15).every((b) => b === 0)) return true; // ::1
+  if ((bytes[0] & 0xfe) === 0xfc) return true; // fc00::/7
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10
+  return false;
+}
+
 function touches(state: EditorState, from: number, to: number) {
   for (const r of state.selection.ranges) if (r.from <= to && r.to >= from) return true;
   return false;
@@ -215,8 +341,9 @@ function buildDecorations(view: EditorView): DecorationSet {
         const marks = node.getChildren("LinkMark");
         const alt = marks.length >= 2 ? doc.sliceString(marks[0].to, marks[1].from) : "";
         if (url) {
-          const src = resolveImage(doc.sliceString(url.from, url.to));
-          out.push(Decoration.replace({ widget: new ImageWidget(src, alt) }).range(node.from, node.to));
+          const raw = doc.sliceString(url.from, url.to);
+          const widget = imageUrlAllowed(raw) ? new ImageWidget(resolveImage(raw), alt) : new BlockedImageWidget(alt);
+          out.push(Decoration.replace({ widget }).range(node.from, node.to));
         }
         return false;
       }

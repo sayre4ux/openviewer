@@ -26,7 +26,7 @@ await new Promise((resolve, reject) => {
 });
 try {
   for (const engine of engines) {
-    for (const script of ["shot.mjs", "check-tables.mjs", "check-modes.mjs", "check-prefs.mjs"]) {
+    for (const script of ["shot.mjs", "check-tables.mjs", "check-modes.mjs", "check-prefs.mjs", "check-security.mjs"]) {
       if (script === "shot.mjs" && engine !== "chromium") continue;
       run(`${script} (${engine})`, "node", [join("scripts", script), join(shots, engine), engine]);
     }

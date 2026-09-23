@@ -3,7 +3,7 @@
 // window edits the overrides; editing the file by hand works too and is picked up when a window
 // regains focus.
 
-use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex, time::SystemTime};
+use std::{collections::HashMap, fs, io::Read, path::PathBuf, sync::Mutex, time::SystemTime};
 use tauri::{
   menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu, SubmenuBuilder},
   webview::WebviewWindowBuilder,
@@ -148,13 +148,25 @@ fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
   Ok(app.path().app_config_dir().map_err(|e| e.to_string())?.join("keybindings.json"))
 }
 
-// Ok(None): no file yet. Err: the file isn't valid JSON (the caller keeps its last good settings).
+const KEYBINDINGS_LIMIT: u64 = 1024 * 1024;
+
+// Ok(None): no file yet. Err: unreadable, too large, or not valid JSON (the caller keeps its last good settings).
 fn read_file(path: &PathBuf) -> Result<Option<(HashMap<String, String>, Vec<String>)>, String> {
-  let text = match fs::read_to_string(path) {
-    Ok(text) => text,
+  let meta = match fs::metadata(path) {
+    Ok(meta) => meta,
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
     Err(e) => return Err(format!("keybindings.json can't be read: {e}")),
   };
+  if meta.len() > KEYBINDINGS_LIMIT {
+    return Err("keybindings.json is too large (the limit is 1 MB)".into());
+  }
+  let file = fs::File::open(path).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
+  let mut buf = Vec::new();
+  file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
+  if buf.len() as u64 > KEYBINDINGS_LIMIT {
+    return Err("keybindings.json is too large (the limit is 1 MB)".into());
+  }
+  let text = String::from_utf8(buf).map_err(|_| "keybindings.json can't be read: invalid UTF-8".to_string())?;
   let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("keybindings.json isn't valid JSON: {e}"))?;
   Ok(Some(sanitize(&value)))
 }
@@ -380,5 +392,32 @@ mod tests {
     for def in commands() {
       assert!(def.key.is_empty() || to_accelerator(&def.key).is_some(), "{} has bad default {}", def.id, def.key);
     }
+  }
+
+  fn temp_bindings(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+      "openviewer-keys-{label}-{}-{}",
+      std::process::id(),
+      SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    ))
+  }
+
+  #[test]
+  fn oversized_keybindings_are_refused() {
+    let path = temp_bindings("big");
+    fs::File::create(&path).unwrap().set_len(KEYBINDINGS_LIMIT + 1).unwrap();
+    let err = read_file(&path).unwrap_err();
+    assert!(err.starts_with("keybindings.json is too large"), "{err}");
+    let _ = fs::remove_file(path);
+  }
+
+  #[test]
+  fn small_keybindings_still_parse() {
+    let path = temp_bindings("small");
+    fs::write(&path, b"{}\n").unwrap();
+    let (clean, notes) = read_file(&path).unwrap().unwrap();
+    assert!(clean.is_empty());
+    assert!(notes.is_empty());
+    let _ = fs::remove_file(path);
   }
 }

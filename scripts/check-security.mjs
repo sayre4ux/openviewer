@@ -1,0 +1,144 @@
+// Security regressions: save snapshots, blocked images, huge tables, line endings.
+// Usage: node scripts/check-security.mjs [outDir] [chromium|webkit]
+import { chromium, webkit } from "playwright";
+import { mkdirSync } from "node:fs";
+
+const out = process.argv[2] ?? "shots";
+const engine = process.argv[3] ?? "chromium";
+mkdirSync(out, { recursive: true });
+const browser = engine === "webkit" ? await webkit.launch() : await chromium.launch({ channel: "chrome" });
+const page = await browser.newPage({ viewport: { width: 1100, height: 760 }, deviceScaleFactor: 2 });
+page.on("pageerror", (e) => console.log("PAGE ERROR:", e.message));
+page.setDefaultTimeout(20000);
+await page.goto(process.env.OV_URL ?? "http://localhost:5173/");
+await page.waitForSelector(".cm-content");
+const results = [];
+const check = (name, ok, detail = "") => { results.push(ok); console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`); };
+
+try {
+  // Saving the pre-edit snapshot leaves later keystrokes dirty. Saving the current one clears it.
+  const dirty = await page.evaluate(() => {
+    window.__ov.load("hello");
+    const snap = window.__ov.snapshot();
+    const v = window.__ov.view;
+    v.dispatch({ changes: { from: v.state.doc.length, insert: "!" } });
+    window.__ov.saved(snap.doc);
+    return window.__ov.isDirty() && window.__ov.view.state.sliceDoc() === "hello!";
+  });
+  check("edit after snapshot stays dirty", dirty);
+  const clean = await page.evaluate(() => {
+    const snap = window.__ov.snapshot();
+    window.__ov.saved(snap.doc);
+    return window.__ov.isDirty() === false && snap.text === "hello!";
+  });
+  check("current snapshot marks clean", clean);
+
+  const endings = await page.evaluate(() => ({
+    lf: window.__ov.lineEndings("a\nb\n"),
+    crlf: window.__ov.lineEndings("a\r\nb\r\n"),
+    cr: window.__ov.lineEndings("a\rb\r"),
+    mixed: window.__ov.lineEndings("a\r\nb\nc"),
+    mixedCr: window.__ov.lineEndings("a\rb\nc"),
+  }));
+  check("line endings classified", endings.lf === "lf" && endings.crlf === "crlf" && endings.cr === "cr" && endings.mixed === "mixed" && endings.mixedCr === "mixed", JSON.stringify(endings));
+  const cr = "alpha\rbeta\rgamma";
+  const round = await page.evaluate((text) => {
+    window.__ov.load(text);
+    const v = window.__ov.view;
+    return { text: v.state.sliceDoc(), br: v.state.lineBreak, lines: v.state.doc.lines };
+  }, cr);
+  check("CR-only round trip", round.text === cr && round.br === "\r" && round.lines === 3, JSON.stringify(round));
+
+  const hosts = await page.evaluate(() => {
+    const ok = window.__ov.imageUrlAllowed;
+    return {
+      loop: ok("http://127.0.0.1/x.png"),
+      lan: ok("http://192.168.1.2/x.png"),
+      js: ok("javascript:alert(1)"),
+      https: ok("https://example.com/x.png"),
+      rel: ok("pics/local.png"),
+      v6: ok("http://[::1]/x.png"),
+      mapped: ok("http://[::ffff:10.1.2.3]/x.png"),
+      local: ok("https://printer.local/x.png"),
+      ten: ok("http://10.9.8.7/x.png"),
+      link: ok("http://169.254.1.1/x.png"),
+      zero: ok("http://0.0.0.0/x.png"),
+      ula: ok("http://[fc00::1]/x.png"),
+      ll6: ok("http://[fe80::1]/x.png"),
+      decimal: ok("http://2130706433/x.png"),
+      data: ok("data:image/png;base64,aaaa"),
+      html: ok("data:text/html,x"),
+      abs: ok("/tmp/pic.png"),
+      proto: ok("//evil.example/x.png"),
+    };
+  });
+  check("image url policy",
+    !hosts.loop && !hosts.lan && !hosts.js && hosts.https && hosts.rel && !hosts.v6 && !hosts.mapped && !hosts.local && !hosts.ten && !hosts.link && !hosts.zero && !hosts.ula && !hosts.ll6 && !hosts.decimal && hosts.data && !hosts.html && hosts.abs && !hosts.proto,
+    JSON.stringify(hosts));
+
+  const markdown = [
+    "Images",
+    "",
+    "![a](http://127.0.0.1/x.png)",
+    "",
+    "![b](http://192.168.1.2/x.png)",
+    "",
+    "![c](javascript:alert(1))",
+    "",
+    "![d](https://example.com/x.png)",
+    "",
+    "![e](pics/local.png)",
+    "",
+  ].join("\n");
+  const rendered = await page.evaluate((markdown) => {
+    window.__ov.load(markdown);
+    const blocked = [...document.querySelectorAll(".cm-md-image-blocked")].map((el) => ({
+      alt: el.querySelector(".cm-md-image-blocked-alt")?.textContent ?? "",
+      note: el.querySelector(".cm-md-image-blocked-note")?.textContent ?? "",
+      imgs: el.querySelectorAll("img").length,
+      html: el.innerHTML.includes("<img"),
+    }));
+    // img.cm-md-image only: CodeMirror also puts empty <img class="cm-widgetBuffer"> around widgets.
+    const imgs = [...document.querySelectorAll("#editor img.cm-md-image")].map((img) => ({
+      alt: img.getAttribute("alt"),
+      src: img.getAttribute("src"),
+    }));
+    return { blocked, imgs };
+  }, markdown);
+  const blockedAlts = rendered.blocked.map((b) => b.alt).sort().join(",");
+  check("blocked images are placeholders",
+    blockedAlts === "a,b,c" && rendered.blocked.every((b) => b.note === "image blocked" && b.imgs === 0 && !b.html),
+    JSON.stringify(rendered.blocked));
+  const byAlt = Object.fromEntries(rendered.imgs.map((img) => [img.alt, img.src]));
+  check("public and relative images load",
+    rendered.imgs.length === 2 && byAlt.d?.includes("https://example.com/x.png") && byAlt.e?.includes("pics/local.png"),
+    JSON.stringify(rendered.imgs));
+  check("no remote private image element",
+    rendered.imgs.every((img) => !/127\.0\.0\.1|192\.168\.1\.2|javascript:/i.test(img.src ?? "")));
+  await page.screenshot({ path: `${out}/sec-images.png` });
+
+  const huge = await page.evaluate(() => {
+    const body = Array.from({ length: 1999 }, () => "| 1 | 2 | 3 |").join("\n");
+    window.__ov.load(`| a | b | c |\n|---|---|---|\n${body}\n\nEND`);
+    return document.querySelectorAll(".cm-md-table").length;
+  });
+  check("huge table stays raw", huge === 0, String(huge));
+  await page.locator(".cm-content").click();
+  await page.evaluate(() => {
+    const v = window.__ov.view;
+    v.dispatch({ selection: { anchor: v.state.doc.length } });
+    v.focus();
+  });
+  await page.keyboard.type("Z");
+  const typed = await page.evaluate(() => window.__ov.view.state.sliceDoc().endsWith("ENDZ") && document.querySelectorAll(".cm-md-table").length === 0);
+  check("huge table still accepts typing", typed);
+
+  await page.evaluate(() => window.__ov.load("| A | B |\n|---|---|\n| 1 | 2 |\n"));
+  await page.waitForSelector(".cm-md-table");
+  const small = await page.evaluate(() => document.querySelectorAll(".cm-md-table").length);
+  check("small table is still a widget", small === 1, String(small));
+} finally {
+  console.log(`${results.filter(Boolean).length}/${results.length} passed`);
+  await browser.close();
+}
+process.exit(results.every(Boolean) ? 0 : 1);

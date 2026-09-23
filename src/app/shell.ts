@@ -1,4 +1,6 @@
+import type { Text } from "@codemirror/state";
 import { setImageResolver } from "../editor/livePreview";
+import { lineEndings } from "./document";
 
 export interface ShellDocument {
   getText(): string;
@@ -7,7 +9,9 @@ export interface ShellDocument {
   isDirty(): boolean;
   isUntouched(): boolean;
   load(text: string, path: string, bom: boolean): void;
-  saved(): void;
+  // text is what gets written; doc is the editor state that write came from.
+  snapshot(): { text: string; doc: Text };
+  saved(doc: Text): void;
   onChange(callback: () => void): void;
 }
 
@@ -47,10 +51,12 @@ export async function startShell(
   };
   doc.onChange(title);
   const saveTo = async (target: string): Promise<boolean> => {
+    // Taken before the await: keystrokes during a slow write must stay unsaved.
+    const snap = doc.snapshot();
     try {
-      await call("write_document", { path: target, text: doc.getText(), bom: doc.getBom() });
+      await call("write_document", { path: target, text: snap.text, bom: doc.getBom() });
       path = target;
-      doc.saved();
+      doc.saved(snap.doc);
       title();
       return true;
     } catch (error) {
@@ -64,13 +70,24 @@ export async function startShell(
   };
   const save = async (): Promise<boolean> => path ? saveTo(path) : saveAs();
   const openIntoCurrent = async (target: string): Promise<void> => {
+    let text: string;
     try {
       const file = await call<{ text: string; bom: boolean }>("read_document", { path: target });
+      text = file.text;
       doc.load(file.text, target, file.bom);
       path = target;
       title();
     } catch (error) {
       await message(String(error), { title: "Couldn’t open document", kind: "error" });
+      return;
+    }
+    // DECISION: once per open, not once per session. Every mixed file gets this sentence,
+    // including a CR/LF mix, because those are saved as LF too.
+    if (lineEndings(text) === "mixed") {
+      await message(
+        "This file mixes Windows (CRLF) and Unix (LF) line endings. OpenViewer will save it with LF line endings.",
+        { title: "Mixed Line Endings", kind: "warning" },
+      );
     }
   };
   const openPath = async (target: string): Promise<void> => {

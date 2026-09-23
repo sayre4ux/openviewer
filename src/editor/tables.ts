@@ -18,6 +18,10 @@ type Align = "left" | "center" | "right" | null;
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
+// Past this many cells (rows × header columns) the table stays source text. The widget
+// builds DOM and listeners for every cell, which freezes the window on a huge table.
+const MAX_TABLE_CELLS = 5000;
+
 // Shortcuts that cells handle themselves, kept in step with the customizable shortcuts.
 let cellFormatKeys: Record<string, string> = { "Cmd+B": "**", "Cmd+I": "*", "Cmd+E": "`" };
 let cellHistoryKeys: Record<string, "undo" | "redo"> = { "Cmd+Z": "undo", "Cmd+Shift+Z": "redo" };
@@ -767,7 +771,7 @@ function buildTables(state: EditorState): DecorationSet {
     enter: (node) => {
       if (node.name !== "Table") return;
       const data = readTable(state, node.node);
-      if (!data) return false;
+      if (!data || data.rows.length * data.rows[0].cells.length > MAX_TABLE_CELLS) return false;
       const widget = new TableWidget(data, state.doc.sliceString(data.from, data.to));
       out.push(Decoration.replace({ widget, block: true }).range(data.from, data.to));
       return false;

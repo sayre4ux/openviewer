@@ -1,16 +1,16 @@
 import { history, defaultKeymap, indentWithTab, undo, redo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
-import { Compartment, type Extension } from "@codemirror/state";
+import { Compartment, type Extension, type Text } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import { makeState, replaceDocument } from "./app/document";
+import { lineEndings, makeState, replaceDocument } from "./app/document";
 import { createOutline } from "./app/outline";
 import { type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
 import { codeHighlight } from "./editor/codeHighlight";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
-import { livePreview } from "./editor/livePreview";
+import { imageUrlAllowed, livePreview } from "./editor/livePreview";
 import { formatInCell, insertTable, setCellKeys } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import sample from "./sample.md?raw";
@@ -196,7 +196,8 @@ const doc: ShellDocument = {
   isDirty: () => !view.state.doc.eq(savedDoc),
   isUntouched: () => currentPath === null && view.state.doc.length === 0 && view.state.doc.eq(savedDoc),
   load,
-  saved: () => { savedDoc = view.state.doc; },
+  snapshot: () => ({ text: view.state.sliceDoc(), doc: view.state.doc }),
+  saved: (next) => { savedDoc = next; },
   onChange: (callback) => { documentChanged = callback; },
 };
 
@@ -219,4 +220,9 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   load: (text: string) => load(text),
   commands,
   modes,
+  lineEndings,
+  imageUrlAllowed,
+  snapshot: () => doc.snapshot(),
+  saved: (next: Text) => doc.saved(next),
+  isDirty: () => doc.isDirty(),
 };
