@@ -1,5 +1,7 @@
 use std::{fs::{self, OpenOptions}, io::Write, path::Path, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex}};
-use tauri::{menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, SubmenuBuilder}, webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
+use tauri::{webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
+
+mod menu;
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -74,18 +76,6 @@ fn encode_query(value: &str) -> String {
   }).collect()
 }
 
-fn item<R: Runtime, M: Manager<R>>(manager: &M, id: &str, text: &str, key: &str) -> tauri::Result<tauri::menu::MenuItem<R>> {
-  MenuItemBuilder::with_id(id, text).accelerator(key).build(manager)
-}
-
-fn check<R: Runtime, M: Manager<R>>(manager: &M, id: &str, text: &str, key: Option<&str>) -> tauri::Result<tauri::menu::CheckMenuItem<R>> {
-  let builder = CheckMenuItemBuilder::with_id(id, text).checked(false);
-  match key {
-    Some(key) => builder.accelerator(key).build(manager),
-    None => builder.build(manager),
-  }
-}
-
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ViewChecks { source: bool, outline: bool, focus: bool, typewriter: bool, word_count: bool }
@@ -114,35 +104,11 @@ fn sync_view_menu<R: Runtime>(app: tauri::AppHandle<R>, window: tauri::Window<R>
   Ok(())
 }
 
-fn app_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> {
-  let app = SubmenuBuilder::new(manager, "OpenViewer")
-    .about(Some(tauri::menu::AboutMetadata { name: Some("OpenViewer".into()), ..Default::default() }))
-    .separator().hide().hide_others().show_all().separator()
-    .item(&item(manager, "quit", "Quit OpenViewer", "CmdOrCtrl+Q")?).build()?;
-  let file = SubmenuBuilder::new(manager, "File")
-    .item(&item(manager, "new", "New", "CmdOrCtrl+N")?)
-    .item(&item(manager, "open", "Open…", "CmdOrCtrl+O")?).separator()
-    .item(&item(manager, "save", "Save", "CmdOrCtrl+S")?)
-    .item(&item(manager, "save-as", "Save As…", "CmdOrCtrl+Shift+S")?).separator()
-    .close_window().build()?;
-  let edit = SubmenuBuilder::new(manager, "Edit")
-    .item(&item(manager, "undo", "Undo", "CmdOrCtrl+Z")?)
-    .item(&item(manager, "redo", "Redo", "CmdOrCtrl+Shift+Z")?).separator()
-    .cut().copy().paste().select_all().separator()
-    .item(&item(manager, "insert-table", "Insert Table", "CmdOrCtrl+Alt+T")?).build()?;
-  let view = SubmenuBuilder::new(manager, "View")
-    .item(&check(manager, "source-mode", "Source Mode", Some("CmdOrCtrl+/"))?).separator()
-    .item(&check(manager, "outline", "Outline", Some("CmdOrCtrl+Shift+L"))?).separator()
-    .item(&check(manager, "focus-mode", "Focus Mode", Some("F8"))?)
-    .item(&check(manager, "typewriter-mode", "Typewriter Mode", Some("F9"))?).separator()
-    .item(&check(manager, "word-count", "Word Count", None)?).build()?;
-  Menu::with_items(manager, &[&app, &file, &edit, &view])
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .manage(Startup::default())
+    .manage(menu::Keybindings::default())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_opener::init())
@@ -150,15 +116,37 @@ pub fn run() {
       if cfg!(debug_assertions) {
         app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
       }
-      app.set_menu(app_menu(app.handle())?)?;
+      menu::load(app.handle())?;
       Ok(())
     })
     .on_menu_event(|app, event| {
+      if event.id().as_ref() == "preferences" {
+        menu::open_preferences(app);
+        return;
+      }
       if let Some(window) = app.webview_windows().values().find(|w| w.is_focused().unwrap_or(false)) {
         let _ = app.emit_to(window.label(), "menu", event.id().as_ref());
       }
     })
-    .invoke_handler(tauri::generate_handler![read_document, write_document, create_document_window, frontend_ready, sync_view_menu])
+    .on_window_event(|window, event| match event {
+      tauri::WindowEvent::Focused(true) => menu::reload_if_changed(window.app_handle()),
+      // Preferences closed mid-recording: bring the menu's shortcuts back.
+      tauri::WindowEvent::Destroyed if window.label() == "preferences" => {
+        let _ = menu::suspend_shortcuts(window.app_handle().clone(), false);
+      }
+      _ => {}
+    })
+    .invoke_handler(tauri::generate_handler![
+      read_document,
+      write_document,
+      create_document_window,
+      frontend_ready,
+      sync_view_menu,
+      menu::get_keybindings,
+      menu::set_keybindings,
+      menu::open_keybindings_file,
+      menu::suspend_shortcuts
+    ])
     .build(tauri::generate_context!())
     .expect("error while building OpenViewer")
     .run(|app, event| {

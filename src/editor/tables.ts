@@ -3,6 +3,7 @@ import { syntaxTree } from "@codemirror/language";
 import { type ChangeSpec, type EditorState, Prec, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { fromEvent } from "../shared/keys";
 
 // GFM tables render as an editable <table>, as in Typora. Each cell is its own small editor:
 // while focused it shows the cell's raw Markdown, otherwise the rendered inline formatting.
@@ -16,6 +17,23 @@ import type { SyntaxNode } from "@lezer/common";
 type Align = "left" | "center" | "right" | null;
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+// Shortcut → marker for formatting inside cells, kept in step with the customizable shortcuts.
+let cellFormatKeys: Record<string, string> = { "Cmd+B": "**", "Cmd+I": "*", "Cmd+E": "`" };
+export function setCellFormatKeys(keys: { bold: string; italic: string; code: string }) {
+  cellFormatKeys = {};
+  if (keys.bold) cellFormatKeys[keys.bold] = "**";
+  if (keys.italic) cellFormatKeys[keys.italic] = "*";
+  if (keys.code) cellFormatKeys[keys.code] = "`";
+}
+
+// A menu command (the menu takes the key before the page sees it) aimed at a focused cell.
+export function formatInCell(marker: string) {
+  const cell = document.activeElement as HTMLElement | null;
+  if (!cell?.classList.contains("cm-md-cell")) return false;
+  cell.dispatchEvent(new CustomEvent("ov-format", { detail: marker }));
+  return true;
+}
 
 interface Cell {
   text: string;
@@ -458,6 +476,7 @@ class TableWidget extends WidgetType {
       cell.focus({ preventScroll: true });
     });
     cell.addEventListener("input", () => this.commit(view, wrap, cell, false));
+    cell.addEventListener("ov-format", (e) => this.toggleFormat(view, wrap, cell, (e as CustomEvent<string>).detail));
     cell.addEventListener("keydown", (e) => this.onKey(e, view, wrap, Number(cell.dataset.row), Number(cell.dataset.col), cell));
   }
 
@@ -535,7 +554,8 @@ class TableWidget extends WidgetType {
     // of this cell into the surrounding editor or the next cell.
     const toStart = (mod && (e.key === "ArrowLeft" || e.key === "ArrowUp")) || e.key === "Home";
     const toEnd = (mod && (e.key === "ArrowRight" || e.key === "ArrowDown")) || e.key === "End";
-    const format = mod && !e.shiftKey && !e.altKey ? { b: "**", i: "*", e: "`" }[e.key.toLowerCase()] : undefined;
+    const pressed = fromEvent(e);
+    const format = pressed ? cellFormatKeys[pressed] : undefined;
     if ((toStart || toEnd) && !e.shiftKey) {
       placeCaret(cell, toStart ? "start" : "end");
     } else if (format) {

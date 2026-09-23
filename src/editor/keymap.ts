@@ -71,12 +71,16 @@ function setHeading(level: number): StateCommand {
   };
 }
 
+// Enter behavior is fixed; formatting commands are bound through the customizable shortcuts.
 export const typoraKeymap: KeyBinding[] = [
   { key: "Enter", run: typoraEnter },
   { key: "Shift-Enter", run: insertNewline },
-  { key: "Mod-b", run: toggleWrap("**") },
-  { key: "Mod-i", run: toggleWrap("*") },
-  { key: "Mod-e", run: toggleWrap("`") },
-  { key: "Mod-0", run: setHeading(0) },
-  ...[1, 2, 3, 4, 5, 6].map((n) => ({ key: `Mod-${n}`, run: setHeading(n) })),
 ];
+
+export const formatCommands: Record<string, StateCommand> = {
+  bold: toggleWrap("**"),
+  italic: toggleWrap("*"),
+  code: toggleWrap("`"),
+  paragraph: setHeading(0),
+  ...Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [`heading-${n}`, setHeading(n)])),
+};

@@ -109,6 +109,7 @@ export async function startShell(
       case "open": await openDialog(); break;
       case "save": await save(); break;
       case "save-as": await saveAs(); break;
+      case "close-window": await win.close(); break;
       case "quit": {
         // DECISION: each window handles its own prompt, so Cancel keeps that document open.
         await emit("quit-request");

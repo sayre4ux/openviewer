@@ -1,4 +1,4 @@
-import { history, historyKeymap, defaultKeymap, indentWithTab, undo, redo } from "@codemirror/commands";
+import { history, defaultKeymap, indentWithTab, undo, redo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { Compartment, type Extension } from "@codemirror/state";
@@ -8,17 +8,21 @@ import { createOutline } from "./app/outline";
 import { type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
 import { codeHighlight } from "./editor/codeHighlight";
-import { typoraKeymap } from "./editor/keymap";
+import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
 import { livePreview } from "./editor/livePreview";
-import { insertTable } from "./editor/tables";
+import { formatInCell, insertTable, setCellFormatKeys } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import sample from "./sample.md?raw";
+import { createKeybindingStore } from "./shared/keybindings";
+import { commandDefs, effectiveKeys, type Overrides, toCodeMirror } from "./shared/keys";
 import "./theme/newsprint.css";
 
 const preview = new Compartment();
 const focusComp = new Compartment();
 const typewriterComp = new Compartment();
+const shortcutsComp = new Compartment();
+let overrides: Overrides = {};
 let documentChanged: () => void = () => undefined;
 
 // Outline and word count are remembered across launches; the other modes start off.
@@ -61,14 +65,9 @@ function extensionsForDocument(): Extension[] {
     preview.of(modes.source ? [] : livePreview),
     focusComp.of(modes.focus ? focusMode : []),
     typewriterComp.of(modes.typewriter ? typewriter : []),
+    shortcutsComp.of(shortcutKeymap()),
     keymap.of([
-      { key: "Mod-/", run: () => (commands["source-mode"](), true) },
-      { key: "Mod-Shift-l", run: () => (commands.outline(), true) },
-      { key: "F8", run: () => (commands["focus-mode"](), true) },
-      { key: "F9", run: () => (commands["typewriter-mode"](), true) },
-      { key: "Mod-Alt-t", run: insertTable },
       ...typoraKeymap,
-      ...historyKeymap,
       indentWithTab,
       ...defaultKeymap,
     ]),
@@ -96,6 +95,32 @@ const load = (text: string, path: string | null = null, bom = false) => {
   outline.refresh();
   wordCount.refresh();
 };
+
+// The customizable shortcuts as a CodeMirror keymap. In the app the menu takes most of these
+// keys first; the keymap covers the rest and runs the browser build used by the tests.
+function shortcutKeymap() {
+  const keys = effectiveKeys(overrides);
+  return keymap.of(
+    commandDefs.flatMap((def) => {
+      const key = toCodeMirror(keys[def.id]);
+      // Looked up at key time: this keymap is built before `commands` exists.
+      const run = () => {
+        const command = commands[def.id];
+        if (!command) return false;
+        command();
+        return true;
+      };
+      return key ? [{ key, run, preventDefault: true }] : [];
+    }),
+  );
+}
+
+function applyShortcuts(next: Overrides) {
+  overrides = next;
+  const keys = effectiveKeys(overrides);
+  setCellFormatKeys({ bold: keys.bold, italic: keys.italic, code: keys.code });
+  view.dispatch({ effects: shortcutsComp.reconfigure(shortcutKeymap()) });
+}
 
 function applyChrome() {
   view.dom.classList.toggle("ov-source", modes.source);
@@ -141,6 +166,17 @@ const commands: Record<string, () => void> = {
   "insert-table": () => {
     insertTable(view);
   },
+  // Formatting from the menu or a shortcut; a focused table cell formats its own text.
+  ...Object.fromEntries(
+    Object.entries(formatCommands).map(([id, command]) => [
+      id,
+      () => {
+        const marker = { bold: "**", italic: "*", code: "`" }[id];
+        if (marker && formatInCell(marker)) return;
+        command(view);
+      },
+    ]),
+  ),
   undo: () => undo(view),
   redo: () => redo(view),
 };
@@ -155,6 +191,10 @@ const doc: ShellDocument = {
   saved: () => { savedDoc = view.state.doc; },
   onChange: (callback) => { documentChanged = callback; },
 };
+
+const keybindings = createKeybindingStore();
+void keybindings.load().then(applyShortcuts);
+keybindings.onChange(applyShortcuts);
 
 outline.attach(view);
 wordCount.attach(view);

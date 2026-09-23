@@ -1,0 +1,29 @@
+[
+  { "id": "new", "label": "New", "menu": "File", "key": "Cmd+N" },
+  { "id": "open", "label": "Open…", "menu": "File", "key": "Cmd+O" },
+  { "id": "save", "label": "Save", "menu": "File", "key": "Cmd+S", "separatorBefore": true },
+  { "id": "save-as", "label": "Save As…", "menu": "File", "key": "Cmd+Shift+S" },
+  { "id": "close-window", "label": "Close Window", "menu": "File", "key": "Cmd+W", "separatorBefore": true },
+
+  { "id": "undo", "label": "Undo", "menu": "Edit", "key": "Cmd+Z" },
+  { "id": "redo", "label": "Redo", "menu": "Edit", "key": "Cmd+Shift+Z" },
+  { "id": "insert-table", "label": "Insert Table", "menu": "Edit", "key": "Cmd+Alt+T", "separatorBefore": true, "afterClipboard": true },
+
+  { "id": "bold", "label": "Bold", "menu": "Format", "key": "Cmd+B" },
+  { "id": "italic", "label": "Italic", "menu": "Format", "key": "Cmd+I" },
+  { "id": "code", "label": "Inline Code", "menu": "Format", "key": "Cmd+E" },
+
+  { "id": "heading-1", "label": "Heading 1", "menu": "Paragraph", "key": "Cmd+1" },
+  { "id": "heading-2", "label": "Heading 2", "menu": "Paragraph", "key": "Cmd+2" },
+  { "id": "heading-3", "label": "Heading 3", "menu": "Paragraph", "key": "Cmd+3" },
+  { "id": "heading-4", "label": "Heading 4", "menu": "Paragraph", "key": "Cmd+4" },
+  { "id": "heading-5", "label": "Heading 5", "menu": "Paragraph", "key": "Cmd+5" },
+  { "id": "heading-6", "label": "Heading 6", "menu": "Paragraph", "key": "Cmd+6" },
+  { "id": "paragraph", "label": "Paragraph", "menu": "Paragraph", "key": "Cmd+0", "separatorBefore": true },
+
+  { "id": "source-mode", "label": "Source Mode", "menu": "View", "key": "Cmd+/", "check": true },
+  { "id": "outline", "label": "Outline", "menu": "View", "key": "Cmd+Shift+L", "check": true, "separatorBefore": true },
+  { "id": "focus-mode", "label": "Focus Mode", "menu": "View", "key": "F8", "check": true, "separatorBefore": true },
+  { "id": "typewriter-mode", "label": "Typewriter Mode", "menu": "View", "key": "F9", "check": true },
+  { "id": "word-count", "label": "Word Count", "menu": "View", "key": "", "check": true, "separatorBefore": true }
+]
