@@ -72,6 +72,54 @@ const firstFocus = await page.evaluate(() => document.activeElement?.classList.c
 check("insert table", inserted.startsWith("Intro\n\n| Column 1 | Column 2 | Column 3 |\n|---|---|---|\n|  |  |  |") && firstFocus === "0,0", `${JSON.stringify(inserted)} focus ${firstFocus}`);
 await page.screenshot({ path: `${out}/t3-inserted.png`, clip: { x: 0, y: 0, width: 1100, height: 360 } });
 
+// --- Regressions from the GPT-6 Sol review ---
+const load = (t) => page.evaluate((t) => window.__ov.load(t), t);
+const widgets = () => page.$$eval(".cm-md-table", (els) => els.map((t) => t.querySelectorAll("thead .cm-md-cell").length));
+
+// A pipe inside backticks splits cells, as the parser says; a structural edit keeps it a table.
+await load("| `x|y` | z |\n|---|---|---|\n| a | b | c |\n"); await settle();
+check("code-span pipe counts as a cell boundary", JSON.stringify(await widgets()) === "[3]", JSON.stringify(await widgets()));
+await cell(1, 2).click();
+await page.locator(".cm-md-table-tools button", { hasText: "+ Row" }).dispatchEvent("mousedown"); await settle();
+check("structural edit keeps table valid", JSON.stringify(await widgets()) === "[3]", JSON.stringify(await text()));
+
+// Tables inside a blockquote stay raw instead of being rewritten without their `>` markers.
+await load("> | A | B |\n> |---|---|\n> | 1 | 2 |\n"); await settle();
+check("quoted table stays raw", (await widgets()).length === 0);
+
+// A pipe after two backslashes is bare, so it must be escaped with a third.
+await load("| A | B |\n|---|---|\n| 1 | 2 |\n"); await settle();
+await cell(1, 0).click(); await page.keyboard.press(`${mod}+ArrowRight`);
+await page.keyboard.type("\\\\|"); await settle();
+check("pipe escape respects backslash parity", (await text()).includes("| 1\\\\\\| |"), JSON.stringify((await text()).split("\n")[2]));
+
+// Enter while an IME is composing belongs to the input method, not table navigation.
+await cell(1, 1).click();
+await page.evaluate(() => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })));
+const stillThere = await page.evaluate(() => [document.activeElement?.dataset.row, document.activeElement?.dataset.col].join(","));
+check("IME Enter ignored", stillThere === "1,1", stillThere);
+
+// Insert Table while a cell has focus goes after that table, not at the stale editor selection.
+await load("Intro\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nOutro\n"); await settle();
+await page.evaluate(() => { const v = window.__ov.view; v.dispatch({ selection: { anchor: 2 } }); });
+await cell(1, 0).click();
+await page.evaluate(() => window.__ov.commands["insert-table"]()); await settle(300);
+check("insert table after focused table", (await text()) === "Intro\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n| Column 1 | Column 2 | Column 3 |\n|---|---|---|\n|  |  |  |\n\nOutro\n", JSON.stringify(await text()));
+
+// Clicking the start of formatted text puts the caret there in the raw Markdown, not at the end.
+await load("| A |\n|---|\n| **night** desk |\n"); await settle();
+const box = await cell(1, 0).boundingBox();
+await page.mouse.click(box.x + 2, box.y + box.height / 2); await page.keyboard.type("X"); await settle();
+check("click maps into raw text", (await tableSrc()).split("\n")[2] === "| X**night** desk |", (await tableSrc()).split("\n")[2]);
+
+// CRLF files stay CRLF through table edits and Enter.
+await load("Para\r\n\r\n| A | B |\r\n|---|---|\r\n| 1 | 2 |\r\n"); await settle();
+await cell(1, 1).click(); await page.keyboard.press("Tab"); await settle();
+await page.evaluate(() => { const v = window.__ov.view; v.dispatch({ selection: { anchor: 4 } }); v.focus(); });
+await page.keyboard.press("Enter"); await settle();
+const crlf = await text();
+check("CRLF preserved", !/[^\r]\n/.test(crlf) && crlf.includes("| 1 | 2 |\r\n|  |  |"), JSON.stringify(crlf));
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);

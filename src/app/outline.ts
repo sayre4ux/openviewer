@@ -20,8 +20,10 @@ function headingText(raw: string) {
     .trim();
 }
 
-function readHeadings(state: EditorState): Heading[] {
-  const tree = ensureSyntaxTree(state, state.doc.length, 50) ?? syntaxTree(state);
+// `complete` is false when parsing the whole document didn't finish within the time budget.
+function readHeadings(state: EditorState): { headings: Heading[]; complete: boolean } {
+  const full = ensureSyntaxTree(state, state.doc.length, 50);
+  const tree = full ?? syntaxTree(state);
   const out: Heading[] = [];
   tree.iterate({
     enter: (node) => {
@@ -32,7 +34,7 @@ function readHeadings(state: EditorState): Heading[] {
       return false;
     },
   });
-  return out;
+  return { headings: out, complete: full !== null };
 }
 
 export function createOutline(host: HTMLElement) {
@@ -48,8 +50,12 @@ export function createOutline(host: HTMLElement) {
   host.replaceChildren(list);
 
   const render = () => {
-    if (!view) return;
-    headings = readHeadings(view.state);
+    if (!view || host.hidden) return;
+    clearTimeout(timer);
+    const read = readHeadings(view.state);
+    headings = read.headings;
+    // Large documents parse in bounded slices; keep going until the outline is complete.
+    if (!read.complete) timer = window.setTimeout(render, 100);
     list.replaceChildren(
       ...headings.map((h, i) => {
         const li = document.createElement("li");
@@ -117,7 +123,7 @@ export function createOutline(host: HTMLElement) {
     },
     // Called on every editor update; headings are re-read shortly after typing stops.
     update(docChanged: boolean) {
-      if (!docChanged) return;
+      if (!docChanged || host.hidden) return;
       clearTimeout(timer);
       timer = window.setTimeout(render, 150);
     },

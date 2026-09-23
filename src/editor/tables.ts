@@ -2,6 +2,7 @@ import { redo, undo } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, Prec, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 
 // GFM tables render as an editable <table>, as in Typora. Each cell is its own small editor:
 // while focused it shows the cell's raw Markdown, otherwise the rendered inline formatting.
@@ -26,26 +27,25 @@ interface TableData {
   align: Align[];
 }
 
-function splitRow(line: string, lineFrom: number): Cell[] {
-  const bounds: number[] = [];
-  let inCode = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === "\\") i++;
-    else if (ch === "`") inCode = !inCode;
-    else if (ch === "|" && !inCode) bounds.push(i);
-  }
-  const trimmed = line.trim();
-  const edges = [-1, ...bounds, line.length];
+function segment(doc: EditorState["doc"], a: number, b: number): Cell {
+  const raw = doc.sliceString(a, b);
+  const lead = raw.length - raw.trimStart().length;
+  return { text: raw.trim(), from: a + lead, segFrom: a, segTo: b };
+}
+
+// Cells come from the parser's own pipe positions (TableDelimiter nodes), so the widget and the
+// Markdown parser always agree on where cells split, including pipes inside code spans.
+function rowCells(doc: EditorState["doc"], row: SyntaxNode): Cell[] {
+  const pipes: number[] = [];
+  for (let c = row.firstChild; c; c = c.nextSibling) if (c.name === "TableDelimiter") pipes.push(c.from);
   const cells: Cell[] = [];
-  for (let k = 0; k < edges.length - 1; k++) {
-    const start = edges[k] + 1;
-    const end = edges[k + 1];
-    if (k === 0 && trimmed.startsWith("|")) continue;
-    if (k === edges.length - 2 && trimmed.endsWith("|")) continue;
-    const raw = line.slice(start, end);
-    const lead = raw.length - raw.trimStart().length;
-    cells.push({ text: raw.trim(), from: lineFrom + start + lead, segFrom: lineFrom + start, segTo: lineFrom + end });
+  let at = row.from;
+  if (pipes[0] !== row.from) pipes.unshift(row.from - 1); // no leading pipe
+  for (let i = 0; i < pipes.length; i++) {
+    at = pipes[i] + 1;
+    const next = i + 1 < pipes.length ? pipes[i + 1] : row.to;
+    if (at > row.to || (i + 1 === pipes.length && at >= row.to)) break;
+    cells.push(segment(doc, at, next));
   }
   return cells;
 }
@@ -58,22 +58,21 @@ function alignment(cell: string): Align {
   return null;
 }
 
-function readTable(state: EditorState, nodeFrom: number, nodeTo: number): TableData | null {
+// DECISION: only top-level tables get the editable widget. Tables inside quotes or lists
+// stay as raw source, because rewriting them would have to preserve each line's `>`/indent.
+function readTable(state: EditorState, table: SyntaxNode): TableData | null {
+  if (table.parent?.name !== "Document") return null;
   const doc = state.doc;
-  const from = doc.lineAt(nodeFrom).from;
-  const to = doc.lineAt(nodeTo).to;
-  const first = doc.lineAt(from).number;
-  const last = doc.lineAt(to).number;
   const rows: Cell[][] = [];
   let align: Align[] = [];
-  for (let n = first; n <= last; n++) {
-    const line = doc.line(n);
-    const cells = splitRow(line.text, line.from);
-    if (n === first + 1) align = cells.map((c) => alignment(c.text));
-    else rows.push(cells);
+  for (let c = table.firstChild; c; c = c.nextSibling) {
+    if (c.name === "TableHeader" || c.name === "TableRow") rows.push(rowCells(doc, c));
+    else if (c.name === "TableDelimiter") {
+      align = doc.sliceString(c.from, c.to).split("|").map((p) => p.trim()).filter(Boolean).map(alignment);
+    }
   }
   if (rows.length === 0 || rows[0].length === 0) return null;
-  return { from, to, rows, align };
+  return { from: doc.lineAt(table.from).from, to: doc.lineAt(table.to).to, rows, align };
 }
 
 function tableAt(state: EditorState, pos: number): TableData | null {
@@ -83,14 +82,14 @@ function tableAt(state: EditorState, pos: number): TableData | null {
     to: pos,
     enter: (node) => {
       if (node.name !== "Table") return;
-      found = readTable(state, node.from, node.to);
+      found = readTable(state, node.node);
       return false;
     },
   });
   return found;
 }
 
-function serialize(rows: string[][], align: Align[]): string {
+function serialize(rows: string[][], align: Align[], lineBreak: string): string {
   const width = Math.max(align.length, ...rows.map((r) => r.length));
   const line = (cells: string[]) =>
     "| " + Array.from({ length: width }, (_, i) => cells[i] ?? "").join(" | ") + " |";
@@ -98,7 +97,7 @@ function serialize(rows: string[][], align: Align[]): string {
     const a = align[i];
     return a === "center" ? ":---:" : a === "right" ? "---:" : a === "left" ? ":---" : "---";
   });
-  return [line(rows[0]), "|" + delim.join("|") + "|", ...rows.slice(1).map(line)].join("\n");
+  return [line(rows[0]), "|" + delim.join("|") + "|", ...rows.slice(1).map(line)].join(lineBreak);
 }
 
 function escapeHtml(s: string) {
@@ -120,8 +119,18 @@ function renderInline(text: string): string {
   return html.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => `<code class="cm-md-code">${codes[Number(i)]}</code>`);
 }
 
-// A bare pipe typed into a cell would split it; store it escaped.
-const escapePipes = (s: string) => s.replace(/\n/g, " ").replace(/(^|[^\\])\|/g, "$1\\|");
+// A bare pipe typed into a cell would split it; store it escaped. A pipe after an even number of
+// backslashes is still bare (`\\|` is an escaped backslash followed by a delimiter).
+function escapePipes(s: string) {
+  let out = "";
+  let slashes = 0;
+  for (const ch of s.replace(/[\r\n]+/g, " ")) {
+    if (ch === "|" && slashes % 2 === 0) out += "\\";
+    out += ch;
+    slashes = ch === "\\" ? slashes + 1 : 0;
+  }
+  return out;
+}
 
 // After a structural edit rebuilds the table DOM, focus returns to this cell.
 let pendingFocus: { tableFrom: number; row: number; col: number; at: "start" | "end" } | null = null;
@@ -134,6 +143,38 @@ function placeCaret(el: HTMLElement, at: "start" | "end") {
   const sel = window.getSelection();
   sel?.removeAllRanges();
   sel?.addRange(range);
+}
+
+function placeCaretAt(el: HTMLElement, offset: number) {
+  el.focus();
+  const text = el.firstChild;
+  const range = document.createRange();
+  if (text && text.nodeType === Node.TEXT_NODE) range.setStart(text, Math.min(offset, text.textContent?.length ?? 0));
+  else range.selectNodeContents(el);
+  range.collapse(true);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
+// Map a caret offset in rendered cell text to the same spot in its raw Markdown by skipping
+// the characters that rendering hides: emphasis/code markers, escapes, and link targets.
+function renderedToRaw(raw: string, offset: number) {
+  let shown = 0;
+  for (let i = 0; i < raw.length; i++) {
+    if (shown === offset) return i;
+    const ch = raw[i];
+    if (ch === "\\" && i + 1 < raw.length) {
+      i++;
+      shown++;
+    } else if (ch === "]" && raw[i + 1] === "(") {
+      const close = raw.indexOf(")", i);
+      i = close < 0 ? raw.length : close;
+    } else if (!"*_~`[".includes(ch)) {
+      shown++;
+    }
+  }
+  return raw.length;
 }
 
 function caretOffset(el: HTMLElement): { start: number; end: number } {
@@ -241,15 +282,18 @@ class TableWidget extends WidgetType {
     const row = () => Number(cell.dataset.row);
     const col = () => Number(cell.dataset.col);
 
+    // Reveal the raw Markdown when a cell gains focus (only if it differs from what is shown).
+    // `offset` is a caret position in the rendered text, mapped into the raw text.
+    let clickOffset: number | null = null;
     cell.addEventListener("focus", () => {
-      // Reveal the raw Markdown only when it differs from what is shown, so a plain click
-      // keeps the caret where it landed.
       const raw = cell.dataset.raw ?? "";
-      if (cell.textContent !== raw) {
-        cell.textContent = raw;
-        placeCaret(cell, "end");
-        view.requestMeasure();
-      }
+      const offset = clickOffset;
+      clickOffset = null;
+      if (cell.textContent === raw) return;
+      cell.textContent = raw;
+      if (offset === null) placeCaret(cell, "end");
+      else placeCaretAt(cell, renderedToRaw(raw, offset));
+      view.requestMeasure();
     });
     cell.addEventListener("blur", () => {
       cell.innerHTML = renderInline(cell.dataset.raw ?? "");
@@ -260,7 +304,20 @@ class TableWidget extends WidgetType {
       if ((e.metaKey || e.ctrlKey) && link) {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("openviewer:open-link", { detail: link.getAttribute("data-href") }));
+        return;
       }
+      if (document.activeElement === cell) return;
+      // First click into a formatted cell: swap to raw text ourselves so the caret lands where
+      // the click was, not where the browser hit-tests the (longer) raw text.
+      const hit = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+      if (!hit || !cell.contains(hit.startContainer)) return;
+      const pre = document.createRange();
+      pre.selectNodeContents(cell);
+      pre.setEnd(hit.startContainer, hit.startOffset);
+      if (cell.textContent === (cell.dataset.raw ?? "")) return;
+      e.preventDefault();
+      clickOffset = pre.toString().length;
+      cell.focus({ preventScroll: true });
     });
     cell.addEventListener("input", () => {
       const table = this.current(view, wrap);
@@ -275,11 +332,14 @@ class TableWidget extends WidgetType {
         : { from: target.segFrom, to: target.segTo, insert: ` ${text.trimEnd()} ` };
       view.dispatch({ changes: change, userEvent: "input.type" });
       view.requestMeasure();
+      // Typewriter mode can't see the caret here (focus is in the cell), so center the cell.
+      if (view.dom.classList.contains("ov-typewriter")) cell.scrollIntoView({ block: "center" });
     });
     cell.addEventListener("keydown", (e) => this.onKey(e, view, wrap, row(), col(), cell));
   }
 
   private onKey(e: KeyboardEvent, view: EditorView, wrap: HTMLElement, r: number, c: number, cell: HTMLElement) {
+    if (e.isComposing || e.keyCode === 229) return; // Enter/arrows confirm or pick IME candidates
     const rows = this.data.rows.length;
     const cols = this.data.rows[0].length;
     const mod = e.metaKey || e.ctrlKey;
@@ -351,14 +411,15 @@ class TableWidget extends WidgetType {
     if (side === "above") {
       const line = doc.lineAt(table.from);
       if (line.number === 1) {
-        view.dispatch({ changes: { from: 0, insert: "\n" }, selection: { anchor: 0 } });
+        view.dispatch({ changes: { from: 0, insert: view.state.lineBreak }, selection: { anchor: 0 } });
       } else {
         view.dispatch({ selection: { anchor: doc.line(line.number - 1).to } });
       }
     } else {
       const line = doc.lineAt(table.to);
       if (line.number === doc.lines) {
-        view.dispatch({ changes: { from: doc.length, insert: "\n" }, selection: { anchor: doc.length + 1 } });
+        const br = view.state.lineBreak;
+        view.dispatch({ changes: { from: doc.length, insert: br }, selection: { anchor: doc.length + br.length } });
       } else {
         view.dispatch({ selection: { anchor: doc.line(line.number + 1).from } });
       }
@@ -408,7 +469,7 @@ class TableWidget extends WidgetType {
         return;
     }
     pendingFocus = { tableFrom: table.from, ...focus, at: "end" };
-    view.dispatch({ changes: { from: table.from, to: table.to, insert: serialize(rows, align) } });
+    view.dispatch({ changes: { from: table.from, to: table.to, insert: serialize(rows, align, view.state.lineBreak) } });
   }
 
   private toolbar(view: EditorView, wrap: HTMLElement) {
@@ -452,7 +513,7 @@ function buildTables(state: EditorState): DecorationSet {
   syntaxTree(state).iterate({
     enter: (node) => {
       if (node.name !== "Table") return;
-      const data = readTable(state, node.from, node.to);
+      const data = readTable(state, node.node);
       if (!data) return false;
       const widget = new TableWidget(data, state.doc.sliceString(data.from, data.to));
       out.push(Decoration.replace({ widget, block: true }).range(data.from, data.to));
@@ -524,22 +585,28 @@ const tableKeys = Prec.high(
 
 export const tables = [tableField, tableKeys];
 
-// ⌥⌘T: insert a 3-column table after the current block and put the caret in its first cell.
+// ⌥⌘T: insert a 3-column table after the current block (or after the table whose cell has
+// focus, since cell focus doesn't move the editor selection) and put the caret in its first cell.
+// Blank lines around it keep neighbouring text from being read as table rows.
 export function insertTable(view: EditorView) {
   const { state } = view;
-  const line = state.doc.lineAt(state.selection.main.head);
+  const br = state.lineBreak;
+  const activeWrap = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-md-table-wrap");
+  const activeTable = activeWrap && view.contentDOM.contains(activeWrap) ? tableAt(state, view.posAtDOM(activeWrap)) : null;
+  const line = state.doc.lineAt(activeTable ? activeTable.to : state.selection.main.head);
+  const next = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
   const table = serialize(
     [
       ["Column 1", "Column 2", "Column 3"],
       ["", "", ""],
     ],
     [null, null, null],
+    br,
   );
-  const before = line.text.trim() === "" ? "" : "\n\n";
-  const at = line.text.trim() === "" ? line.from : line.to;
-  const insert = before + table + "\n";
-  const tableFrom = at + before.length;
-  pendingFocus = { tableFrom, row: 0, col: 0, at: "end" };
-  view.dispatch({ changes: { from: at, to: line.text.trim() === "" ? line.to : at, insert }, userEvent: "input" });
+  const before = line.text.trim() === "" ? br : br + br;
+  const after = next && next.text.trim() !== "" ? br : "";
+  const at = line.to;
+  pendingFocus = { tableFrom: at + before.length, row: 0, col: 0, at: "end" };
+  view.dispatch({ changes: { from: at, insert: before + table + after }, userEvent: "input" });
   return true;
 }

@@ -119,7 +119,9 @@ export async function startShell(
     }
   });
   // The macOS menu is shared by all windows, so its checkmarks follow whichever window is focused.
-  const syncMenu = () => void call("sync_view_menu", { checks: checks() });
+  const syncMenu = () => {
+    if (document.hasFocus()) void call("sync_view_menu", { checks: checks() });
+  };
   onModesChanged(syncMenu);
   await win.onFocusChanged(({ payload: focused }) => {
     if (focused) syncMenu();

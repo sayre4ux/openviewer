@@ -17,7 +17,7 @@ const typoraEnter: Command = (view) => {
   }
   const line = state.doc.lineAt(pos);
   if (line.text.trim() === "") return insertNewline(view);
-  view.dispatch(state.replaceSelection("\n\n"), { scrollIntoView: true, userEvent: "input" });
+  view.dispatch(state.replaceSelection(state.lineBreak + state.lineBreak), { scrollIntoView: true, userEvent: "input" });
   return true;
 };
 

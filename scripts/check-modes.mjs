@@ -72,6 +72,12 @@ await run("typewriter-mode");
 await page.reload(); await page.waitForSelector(".cm-content"); await settle();
 check("outline remembered", await page.isVisible("#outline"));
 
+// Outline on a large document eventually lists every heading (parsing continues in slices).
+await page.evaluate(() => window.__ov.load(Array.from({ length: 12000 }, (_, i) => `## Heading ${i + 1}\n\nText ${i}.\n`).join("\n")));
+await page.waitForFunction(() => document.querySelectorAll(".ov-outline-item").length === 12000, null, { timeout: 15000 }).catch(() => {});
+const bigCount = await page.$$eval(".ov-outline-item", (els) => els.length);
+check("outline complete on 12k headings", bigCount === 12000, String(bigCount));
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);
