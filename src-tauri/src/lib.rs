@@ -64,12 +64,16 @@ fn write_document(path: String, text: String, bom: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn create_document_window<R: Runtime>(app: tauri::AppHandle<R>, path: Option<String>) -> Result<(), String> {
-  let label = format!("document-{}", TEMP_ID.fetch_add(1, Ordering::Relaxed));
   let url = match path {
     Some(path) => format!("index.html?path={}", encode_query(&path)),
     None => "index.html".to_string(),
   };
-  WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
+  open_window(&app, url)
+}
+
+fn open_window<R: Runtime>(app: &tauri::AppHandle<R>, url: String) -> Result<(), String> {
+  let label = format!("document-{}", TEMP_ID.fetch_add(1, Ordering::Relaxed));
+  WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
     .title("OpenViewer").inner_size(1100.0, 760.0).min_inner_size(480.0, 360.0)
     .build().map(|_| ()).map_err(|e| e.to_string())
 }
@@ -145,6 +149,7 @@ pub fn run() {
       match target {
         Some(label) => { let _ = app.emit_to(label.as_str(), "menu", id); }
         None if id == "new" => { let _ = create_document_window(app.clone(), None); }
+        None if id == "open" => { let _ = open_window(app, "index.html?action=open".into()); }
         None => {}
       }
     })

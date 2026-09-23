@@ -155,5 +155,7 @@ export async function startShell(
     if (/^(https?:|mailto:)/i.test(href)) void openUrl(href);
   });
   for (const pending of await call<string[]>("frontend_ready")) await openPath(pending);
+  // Opened by File → Open while no document window existed.
+  if (new URLSearchParams(location.search).get("action") === "open") await openDialog();
   title();
 }

@@ -88,14 +88,24 @@ export function display(shortcut: string): string {
   return order.filter(([m]) => parts.includes(m)).map(([, s]) => s).join("") + (symbols[key] ?? key);
 }
 
+// "Shift+Cmd+K" → "Cmd+Shift+K", so equal shortcuts compare equal (same rule as the Rust side).
+export function canonical(shortcut: string) {
+  if (!shortcut) return "";
+  const parts = shortcut.split("+");
+  const key = parts.pop()!;
+  const mods = ["Cmd", "Ctrl", "Alt", "Shift"];
+  return [...mods.filter((m) => parts.includes(m)), ...parts.filter((p) => !mods.includes(p)), key].join("+");
+}
+
 // Keep only entries for known commands with well-formed values ("" is allowed: no shortcut).
 // An override that repeats a shortcut an earlier command already has is dropped, as in Rust.
 export function sanitize(raw: unknown): Overrides {
   const out: Overrides = {};
   if (!raw || typeof raw !== "object") return out;
   const given = raw as Record<string, unknown>;
-  for (const [id, value] of Object.entries(given)) {
-    if (!commandIds.has(id) || typeof value !== "string") continue;
+  for (const [id, raw] of Object.entries(given)) {
+    if (!commandIds.has(id) || typeof raw !== "string") continue;
+    const value = canonical(raw);
     if (value === "" || (/^(?:(?:Cmd|Ctrl|Alt|Shift)\+)*[^+]+$/.test(value) && isUsable(value) && !reserved[value])) {
       out[id] = value;
     }

@@ -115,6 +115,21 @@ await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
 check("broken settings reported", await page.isVisible("#problems") && (await page.textContent("#problems")).includes("valid JSON"));
 await page.screenshot({ path: `${out}/p3-problems.png` });
 
+// Modifier order doesn't hide a duplicate.
+await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ bold: "Shift+Cmd+K", italic: "Cmd+Shift+K" })));
+await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+check("modifier order normalized", (await row("Bold").locator("kbd").textContent()) === "⇧⌘K" && (await row("Italic").locator("kbd").textContent()) === "⌘I");
+
+// Undo rebound onto a key cells use for navigation still undoes in a cell.
+await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ undo: "Cmd+Left" })));
+await page.setViewportSize({ width: 1100, height: 700 });
+await page.goto(base); await page.waitForSelector(".cm-content"); await settle(300);
+await page.evaluate(() => { window.__ov.load("| A |\n|---|\n| cell |\n"); window.__ov.view.focus(); }); await settle();
+await page.locator('.cm-md-cell[data-row="1"]').click(); await page.keyboard.press("End"); await page.keyboard.type("X"); await settle();
+await page.keyboard.press("Meta+ArrowLeft"); await settle();
+const undoneLeft = await page.evaluate(() => window.__ov.view.state.doc.line(3).text);
+check("rebound undo beats cell navigation", undoneLeft === "| cell |", undoneLeft);
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);

@@ -560,15 +560,17 @@ class TableWidget extends WidgetType {
     const toEnd = (mod && (e.key === "ArrowRight" || e.key === "ArrowDown")) || e.key === "End";
     const pressed = fromEvent(e);
     const format = pressed ? cellFormatKeys[pressed] : undefined;
-    if ((toStart || toEnd) && !e.shiftKey) {
-      placeCaret(cell, toStart ? "start" : "end");
-    } else if (format) {
-      this.toggleFormat(view, wrap, cell, format);
-    } else if (mod && e.key.toLowerCase() === "a") {
-      selectText(cell, 0, len);
-    } else if (pressed && cellHistoryKeys[pressed]) {
+    // Customizable keys come first, so a rebinding onto a navigation key still works.
+    if (pressed && cellHistoryKeys[pressed]) {
       if (cellHistoryKeys[pressed] === "redo") redo(view);
       else undo(view);
+    } else if (format) {
+      this.toggleFormat(view, wrap, cell, format);
+    } else if ((toStart || toEnd) && !e.shiftKey) {
+      placeCaret(cell, toStart ? "start" : "end");
+    } else if (mod && e.key.toLowerCase() === "a") {
+      selectText(cell, 0, len);
+
     } else if (mod && e.key === "Enter") {
       this.structural(view, wrap, "row-below", r, c);
     } else if (e.key === "Tab" && !e.shiftKey) {

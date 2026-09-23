@@ -60,6 +60,17 @@ pub fn to_accelerator(shortcut: &str) -> Option<String> {
   Some(out.join("+"))
 }
 
+// "Shift+Cmd+K" → "Cmd+Shift+K": modifiers in the canonical order, so equal shortcuts compare equal.
+pub fn canonical(shortcut: &str) -> String {
+  if shortcut.is_empty() { return String::new() }
+  let mut parts: Vec<&str> = shortcut.split('+').collect();
+  let key = parts.pop().unwrap_or("");
+  let mut out: Vec<&str> = ["Cmd", "Ctrl", "Alt", "Shift"].into_iter().filter(|m| parts.contains(m)).collect();
+  out.extend(parts.iter().filter(|p| !["Cmd", "Ctrl", "Alt", "Shift"].contains(p))); // unknown: left for to_accelerator to reject
+  out.push(key);
+  out.join("+")
+}
+
 // F1–F24, the range macOS menus accept (the frontend recorder uses the same range).
 fn is_fkey(k: &str) -> bool {
   k.len() > 1 && k.starts_with('F') && !k[1..].starts_with('0') && k[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n))
@@ -85,6 +96,7 @@ pub fn sanitize(raw: &serde_json::Value) -> (HashMap<String, String>, Vec<String
       notes.push(format!("{id}: the shortcut must be a string"));
       continue;
     };
+    let v = &canonical(v);
     if !defs.iter().any(|d| &d.id == id) {
       notes.push(format!("{id}: unknown command"));
     } else if !v.is_empty() && to_accelerator(v).is_none() {
@@ -214,7 +226,7 @@ pub fn set_keybindings<R: Runtime>(app: AppHandle<R>, overrides: serde_json::Val
   if let Some(dir) = path.parent() { fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
   // A hand-edited file that doesn't parse is kept next to the new one rather than lost.
   if matches!(read_file(&path), Err(_)) {
-    let _ = fs::copy(&path, path.with_extension("json.bak"));
+    fs::copy(&path, path.with_extension("json.bak")).map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
   }
   let sorted: std::collections::BTreeMap<_, _> = clean.iter().collect(); // stable order for diffs
   let text = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())? + "\n";
@@ -345,6 +357,14 @@ mod tests {
     assert!(!clean.contains_key("italic")); // falls back to its default, Cmd+I
     assert!(!clean.contains_key("code")); // Cmd+S belongs to Save, which comes first
     assert_eq!(notes.len(), 2);
+  }
+
+  #[test]
+  fn modifier_order_is_normalized() {
+    let (clean, notes) = sanitize(&serde_json::json!({ "bold": "Shift+Cmd+K", "italic": "Cmd+Shift+K" }));
+    assert_eq!(clean.get("bold").map(String::as_str), Some("Cmd+Shift+K"));
+    assert!(!clean.contains_key("italic"));
+    assert_eq!(notes.len(), 1);
   }
 
   #[test]
