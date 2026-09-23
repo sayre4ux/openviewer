@@ -8,6 +8,7 @@ import { type ShellDocument, startShell } from "./app/shell";
 import { codeHighlight } from "./editor/codeHighlight";
 import { typoraKeymap } from "./editor/keymap";
 import { livePreview } from "./editor/livePreview";
+import { insertTable } from "./editor/tables";
 import sample from "./sample.md?raw";
 import "./theme/newsprint.css";
 
@@ -27,6 +28,7 @@ function extensionsForDocument(): Extension[] {
         key: "Mod-/",
         run: (v) => { toggleSource(v); return true; },
       },
+      { key: "Mod-Alt-t", run: insertTable },
       ...typoraKeymap,
       ...historyKeymap,
       indentWithTab,
