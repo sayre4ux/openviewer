@@ -92,7 +92,9 @@ struct ViewChecks { source: bool, outline: bool, focus: bool, typewriter: bool, 
 
 // The menu bar is shared by every window; the focused window reports its modes here.
 #[tauri::command]
-fn sync_view_menu<R: Runtime>(app: tauri::AppHandle<R>, checks: ViewChecks) -> Result<(), String> {
+fn sync_view_menu<R: Runtime>(app: tauri::AppHandle<R>, window: tauri::Window<R>, checks: ViewChecks) -> Result<(), String> {
+  // Checked here, not in the frontend: a request can arrive after focus has moved on.
+  if !window.is_focused().unwrap_or(false) { return Ok(()) }
   let Some(menu) = app.menu() else { return Ok(()) };
   let wanted = [
     ("source-mode", checks.source),

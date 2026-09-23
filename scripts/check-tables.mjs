@@ -120,6 +120,23 @@ await page.keyboard.press("Enter"); await settle();
 const crlf = await text();
 check("CRLF preserved", !/[^\r]\n/.test(crlf) && crlf.includes("| 1 | 2 |\r\n|  |  |"), JSON.stringify(crlf));
 
+// --- Regressions from the second review ---
+// Spaces after the closing pipe are not an extra column.
+await load("| A | B |  \n|---|---|\n| 1 | 2 |   \n"); await settle();
+check("trailing spaces add no column", JSON.stringify(await widgets()) === "[2]", JSON.stringify(await widgets()));
+
+// An underscore inside a word is literal text, so a click after it maps past it exactly once.
+await load("| A |\n|---|\n| **a_b** z |\n"); await settle();
+const ub = await cell(1, 0).boundingBox();
+await page.mouse.click(ub.x + 2, ub.y + ub.height / 2); await page.keyboard.type("X"); await settle();
+check("click before intraword underscore text", (await tableSrc()).split("\n")[2] === "| X**a_b** z |", (await tableSrc()).split("\n")[2]);
+
+// Insert Table into an empty document starts on the first line.
+await load(""); await settle();
+await page.evaluate(() => window.__ov.view.focus());
+await page.evaluate(() => window.__ov.commands["insert-table"]()); await settle(300);
+check("insert table into empty document", (await text()).startsWith("| Column 1 |"), JSON.stringify(await text()));
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);

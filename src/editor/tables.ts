@@ -38,13 +38,14 @@ function segment(doc: EditorState["doc"], a: number, b: number): Cell {
 function rowCells(doc: EditorState["doc"], row: SyntaxNode): Cell[] {
   const pipes: number[] = [];
   for (let c = row.firstChild; c; c = c.nextSibling) if (c.name === "TableDelimiter") pipes.push(c.from);
-  const cells: Cell[] = [];
-  let at = row.from;
   if (pipes[0] !== row.from) pipes.unshift(row.from - 1); // no leading pipe
+  const cells: Cell[] = [];
   for (let i = 0; i < pipes.length; i++) {
-    at = pipes[i] + 1;
-    const next = i + 1 < pipes.length ? pipes[i + 1] : row.to;
-    if (at > row.to || (i + 1 === pipes.length && at >= row.to)) break;
+    const at = pipes[i] + 1;
+    const last = i + 1 === pipes.length;
+    const next = last ? row.to : pipes[i + 1];
+    // After the final pipe, only real text is a cell; trailing whitespace is not.
+    if (last && doc.sliceString(at, next).trim() === "") break;
     cells.push(segment(doc, at, next));
   }
   return cells;
@@ -170,6 +171,8 @@ function renderedToRaw(raw: string, offset: number) {
     } else if (ch === "]" && raw[i + 1] === "(") {
       const close = raw.indexOf(")", i);
       i = close < 0 ? raw.length : close;
+    } else if (ch === "_" && /[\p{L}\p{N}]/u.test(raw[i - 1] ?? "") && /[\p{L}\p{N}]/u.test(raw[i + 1] ?? "")) {
+      shown++; // intraword underscore is literal, not emphasis
     } else if (!"*_~`[".includes(ch)) {
       shown++;
     }
@@ -189,6 +192,8 @@ function caretOffset(el: HTMLElement): { start: number; end: number } {
 }
 
 class TableWidget extends WidgetType {
+  private composing = false;
+  private composedAt = 0;
   constructor(readonly data: TableData, readonly source: string) {
     super();
   }
@@ -285,6 +290,11 @@ class TableWidget extends WidgetType {
     // Reveal the raw Markdown when a cell gains focus (only if it differs from what is shown).
     // `offset` is a caret position in the rendered text, mapped into the raw text.
     let clickOffset: number | null = null;
+    cell.addEventListener("compositionstart", () => { this.composing = true; });
+    cell.addEventListener("compositionend", () => {
+      this.composedAt = performance.now();
+      this.composing = false;
+    });
     cell.addEventListener("focus", () => {
       const raw = cell.dataset.raw ?? "";
       const offset = clickOffset;
@@ -339,13 +349,17 @@ class TableWidget extends WidgetType {
   }
 
   private onKey(e: KeyboardEvent, view: EditorView, wrap: HTMLElement, r: number, c: number, cell: HTMLElement) {
-    if (e.isComposing || e.keyCode === 229) return; // Enter/arrows confirm or pick IME candidates
+    // Enter/arrows confirm or pick IME candidates. WebKit can deliver the committing Enter just
+    // after compositionend without the composing flag, hence the short grace period.
+    if (e.isComposing || e.keyCode === 229 || this.composing || performance.now() - this.composedAt < 80) return;
     const rows = this.data.rows.length;
     const cols = this.data.rows[0].length;
     const mod = e.metaKey || e.ctrlKey;
     const go = (row: number, col: number, at: "start" | "end") => {
       const el = wrap.querySelector<HTMLElement>(`.cm-md-cell[data-row="${row}"][data-col="${col}"]`);
-      if (el) placeCaret(el, at);
+      if (!el) return;
+      placeCaret(el, at);
+      if (view.dom.classList.contains("ov-typewriter")) el.scrollIntoView({ block: "center" });
     };
     const { start, end } = caretOffset(cell);
     const len = (cell.textContent ?? "").length;
@@ -603,7 +617,7 @@ export function insertTable(view: EditorView) {
     [null, null, null],
     br,
   );
-  const before = line.text.trim() === "" ? br : br + br;
+  const before = state.doc.length === 0 ? "" : line.text.trim() === "" ? br : br + br;
   const after = next && next.text.trim() !== "" ? br : "";
   const at = line.to;
   pendingFocus = { tableFrom: at + before.length, row: 0, col: 0, at: "end" };
