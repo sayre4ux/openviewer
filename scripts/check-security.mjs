@@ -158,6 +158,72 @@ try {
   await page.waitForSelector(".cm-md-table");
   const small = await page.evaluate(() => document.querySelectorAll(".cm-md-table").length);
   check("small table is still a widget", small === 1, String(small));
+
+  // Save during close must not drop keystrokes that landed while the write was in flight.
+  const closeRace = await page.evaluate(async () => {
+    const run = async (answers, onSave) => {
+      let asks = 0;
+      let dirty = true;
+      const closed = await window.__ov.resolveClose(
+        () => dirty,
+        async () => answers[asks++] ?? "Cancel",
+        async () => onSave((value) => { dirty = value; }),
+      );
+      return { closed, asks, dirty };
+    };
+    return {
+      stillDirty: await run(["Save", "Cancel"], (setDirty) => { setDirty(true); return true; }),
+      clean: await run(["Save", "Cancel"], (setDirty) => { setDirty(false); return true; }),
+      failed: await run(["Save", "Save"], () => false),
+      discard: await run(["No"], () => true),
+    };
+  });
+  check("close asks again when save leaves the document dirty",
+    closeRace.stillDirty.closed === false && closeRace.stillDirty.asks === 2 && closeRace.stillDirty.dirty === true,
+    JSON.stringify(closeRace.stillDirty));
+  check("close finishes when save leaves the document clean",
+    closeRace.clean.closed === true && closeRace.clean.asks === 1 && closeRace.clean.dirty === false,
+    JSON.stringify(closeRace.clean));
+  check("failed save does not close",
+    closeRace.failed.closed === false && closeRace.failed.asks === 1,
+    JSON.stringify(closeRace.failed));
+  check("discard closes without saving",
+    closeRace.discard.closed === true && closeRace.discard.asks === 1,
+    JSON.stringify(closeRace.discard));
+
+  // Ten tables under the per-table cap still have to share one document budget.
+  // The decoration set is the whole document; the DOM only mounts widgets in the viewport.
+  page.setDefaultTimeout(120000);
+  const many = await page.evaluate(() => {
+    const row = "| 1 | 2 | 3 |";
+    const one = ["| a | b | c |", "|---|---|---|", ...Array.from({ length: 799 }, () => row)].join("\n");
+    const tables = Array.from({ length: 10 }, (_, i) => (i === 9 ? one.replace("| a |", "| late |") : one));
+    window.__ov.load(`${tables.join("\n\n")}\n\nEND`);
+    const parsed = window.__ov.forceParsing();
+    const at = window.__ov.view.state.sliceDoc().lastIndexOf("| late |");
+    const stats = window.__ov.tableRenderStats();
+    const lateCovered = stats.ranges.some(([from, to]) => at >= from && at < to);
+    return {
+      parsed,
+      widgets: stats.widgets,
+      widgetCells: stats.cells,
+      lateCovered,
+      drawn: document.querySelectorAll(".cm-md-table").length,
+    };
+  });
+  check("document table budget leaves later tables raw",
+    many.parsed === true && many.widgetCells > 0 && many.widgetCells <= 20000 &&
+    many.widgets > 0 && many.widgets < 10 && !many.lateCovered && many.drawn > 0,
+    JSON.stringify(many));
+  await page.locator(".cm-content").click();
+  await page.evaluate(() => {
+    const v = window.__ov.view;
+    v.dispatch({ selection: { anchor: v.state.doc.length } });
+    v.focus();
+  });
+  await page.keyboard.type("Z");
+  const manyTyped = await page.evaluate(() => window.__ov.view.state.sliceDoc().endsWith("ENDZ"));
+  check("document table budget still accepts typing", manyTyped);
 } finally {
   console.log(`${results.filter(Boolean).length}/${results.length} passed`);
   await browser.close();

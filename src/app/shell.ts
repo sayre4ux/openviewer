@@ -19,6 +19,24 @@ export interface ShellDocument {
 const SAVE = "Save";
 const DISCARD = "Don’t Save";
 
+// After Save, close only when the document is still clean. Typing during the write leaves it
+// dirty; ask again instead of closing over those keystrokes. A failed save does not close.
+export async function resolveClose(
+  isDirty: () => boolean,
+  ask: () => Promise<string>,
+  save: () => Promise<boolean>,
+): Promise<boolean> {
+  for (;;) {
+    if (!isDirty()) return true;
+    const result = await ask();
+    if (result === SAVE || result === "Yes") {
+      if (!await save()) return false;
+      continue;
+    }
+    return result === DISCARD || result === "No";
+  }
+}
+
 export function localImageCandidate(source: string, documentPath: string): string | null {
   const folder = documentPath.replace(/\/[^/]*$/, "");
   const root = folder.split("/").filter(Boolean);
@@ -115,15 +133,14 @@ export async function startShell(
     const selected = await call<string | null>("open_dialog");
     if (typeof selected === "string") await openPath(selected);
   };
-  const askToClose = async (): Promise<boolean> => {
-    if (!doc.isDirty()) return true;
-    const result = await message(`Do you want to save the changes you made to ${path?.split(/[\\/]/).pop() || "Untitled"}?`, {
-      title: "Unsaved Changes", kind: "warning", buttons: { yes: SAVE, no: DISCARD, cancel: "Cancel" },
-    });
+  const askToClose = (): Promise<boolean> => resolveClose(
+    () => doc.isDirty(),
     // With custom buttons the dialog resolves to the clicked button's label.
-    if (result === SAVE || result === "Yes") return save();
-    return result === DISCARD || result === "No";
-  };
+    () => message(`Do you want to save the changes you made to ${path?.split(/[\\/]/).pop() || "Untitled"}?`, {
+      title: "Unsaved Changes", kind: "warning", buttons: { yes: SAVE, no: DISCARD, cancel: "Cancel" },
+    }),
+    () => save(),
+  );
 
   // Set before the first load so images in the startup document resolve on first render.
   setImageResolver((src) => {

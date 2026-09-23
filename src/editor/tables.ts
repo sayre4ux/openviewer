@@ -21,6 +21,9 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 // Past this many cells (rows × header columns) the table stays source text. The widget
 // builds DOM and listeners for every cell, which freezes the window on a huge table.
 const MAX_TABLE_CELLS = 5000;
+// DECISION: a single table under the cap can be joined by enough others to freeze the window.
+// Once another widget would pass this total, that table and every table after it stay raw.
+const MAX_DOCUMENT_TABLE_CELLS = 20000;
 
 // Shortcuts that cells handle themselves, kept in step with the customizable shortcuts.
 let cellFormatKeys: Record<string, string> = { "Cmd+B": "**", "Cmd+I": "*", "Cmd+E": "`" };
@@ -81,17 +84,22 @@ function segment(doc: Doc, a: number, b: number): Cell {
 }
 
 // Split a row at its pipe positions. After the final pipe, only real text is a cell; trailing
-// whitespace is not.
-function makeRow(doc: Doc, from: number, to: number, pipes: number[]): Row {
-  const cuts = pipes[0] === from ? [...pipes] : [from - 1, ...pipes]; // -1: no leading pipe
-  const cells: Cell[] = [];
+// whitespace is not. The same spans feed the cell-count budget, so the cap and the widget agree.
+function cellSpans(doc: Doc, from: number, to: number, pipes: number[]): Array<[number, number]> {
+  const cuts = pipes[0] === from ? pipes : [from - 1, ...pipes]; // -1: no leading pipe
+  const spans: Array<[number, number]> = [];
   for (let i = 0; i < cuts.length; i++) {
     const at = cuts[i] + 1;
     const last = i + 1 === cuts.length;
     const next = last ? to : cuts[i + 1];
     if (last && doc.sliceString(at, next).trim() === "") break;
-    cells.push(segment(doc, at, next));
+    spans.push([at, next]);
   }
+  return spans;
+}
+
+function makeRow(doc: Doc, from: number, to: number, pipes: number[]): Row {
+  const cells = cellSpans(doc, from, to, pipes).map(([at, next]) => segment(doc, at, next));
   const lastPipe = pipes.length ? pipes[pipes.length - 1] : null;
   const line = doc.lineAt(from);
   return {
@@ -765,15 +773,47 @@ class TableWidget extends WidgetType {
   }
 }
 
+// Header cells × body rows (delimiter excluded), from the parser's pipes, before any widget data.
+function countedCells(state: EditorState, table: SyntaxNode): number | null {
+  const doc = state.doc;
+  let rows = 0;
+  let header = 0;
+  for (let c = table.firstChild; c; c = c.nextSibling) {
+    if (c.name !== "TableHeader" && c.name !== "TableRow") continue;
+    if (rows === 0) {
+      header = cellSpans(doc, c.from, c.to, c.getChildren("TableDelimiter").map((d) => d.from)).length;
+      if (header === 0) return null;
+    }
+    rows++;
+  }
+  return rows === 0 ? null : rows * header;
+}
+
 function buildTables(state: EditorState): DecorationSet {
   const out: Range<Decoration>[] = [];
+  let used = 0;
+  let full = false;
   syntaxTree(state).iterate({
     enter: (node) => {
       if (node.name !== "Table") return;
+      if (full) return false;
+      const cells = countedCells(state, node.node);
+      if (cells === null || cells > MAX_TABLE_CELLS) return false;
+      if (used + cells > MAX_DOCUMENT_TABLE_CELLS) {
+        full = true;
+        return false;
+      }
       const data = readTable(state, node.node);
-      if (!data || data.rows.length * data.rows[0].cells.length > MAX_TABLE_CELLS) return false;
+      if (!data) return false;
+      const actual = data.rows.length * data.rows[0].cells.length;
+      if (actual > MAX_TABLE_CELLS) return false;
+      if (used + actual > MAX_DOCUMENT_TABLE_CELLS) {
+        full = true;
+        return false;
+      }
+      used += actual;
       const widget = new TableWidget(data, state.doc.sliceString(data.from, data.to));
-      out.push(Decoration.replace({ widget, block: true }).range(data.from, data.to));
+      out.push(Decoration.replace({ widget, block: true, cells: actual }).range(data.from, data.to));
       return false;
     },
   });
@@ -788,6 +828,21 @@ const tableField = StateField.define<DecorationSet>({
   },
   provide: (field) => [EditorView.decorations.from(field), EditorView.atomicRanges.of((v) => v.state.field(field))],
 });
+
+export function tableRenderStats(state: EditorState): { widgets: number; cells: number; ranges: [number, number][] } {
+  const set = state.field(tableField, false);
+  if (!set) return { widgets: 0, cells: 0, ranges: [] };
+  const ranges: [number, number][] = [];
+  let cells = 0;
+  const cursor = set.iter();
+  while (cursor.value) {
+    const n = cursor.value.spec.cells;
+    if (typeof n === "number") cells += n;
+    ranges.push([cursor.from, cursor.to]);
+    cursor.next();
+  }
+  return { widgets: ranges.length, cells, ranges };
+}
 
 function focusCell(view: EditorView, tableFrom: number, row: number | "last", col: number) {
   const wraps = Array.from(view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap"));

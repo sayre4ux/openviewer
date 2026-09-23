@@ -3,7 +3,15 @@
 // window edits the overrides; editing the file by hand works too and is picked up when a window
 // regains focus.
 
-use std::{collections::HashMap, fs, io::Read, path::PathBuf, sync::Mutex, time::SystemTime};
+use std::{
+  collections::HashMap,
+  fs,
+  io::Read,
+  os::unix::fs::OpenOptionsExt,
+  path::{Path, PathBuf},
+  sync::Mutex,
+  time::SystemTime,
+};
 use tauri::{
   menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu, SubmenuBuilder},
   webview::WebviewWindowBuilder,
@@ -150,9 +158,30 @@ fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 
 const KEYBINDINGS_LIMIT: u64 = 1024 * 1024;
 
+fn backup_path(path: &Path) -> PathBuf {
+  path.with_extension("json.bak")
+}
+
+// A symlink, or anything that isn't a regular file, is refused. Following it could replace a document.
+fn ensure_plain_file(path: &Path, label: &str) -> Result<(), String> {
+  match fs::symlink_metadata(path) {
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    Err(e) => Err(format!("{label} can't be used: {e}")),
+    Ok(meta) if meta.file_type().is_symlink() => Err(format!("{label} is a symbolic link and will not be followed")),
+    Ok(meta) if !meta.file_type().is_file() => Err(format!("{label} is not a regular file")),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn guard_keybindings(path: &Path) -> Result<(), String> {
+  ensure_plain_file(path, "keybindings.json")?;
+  ensure_plain_file(&backup_path(path), "keybindings.json.bak")
+}
+
 // Ok(None): no file yet. Err: unreadable, too large, or not valid JSON (the caller keeps its last good settings).
-fn read_file(path: &PathBuf) -> Result<Option<(HashMap<String, String>, Vec<String>)>, String> {
-  let meta = match fs::metadata(path) {
+fn read_file(path: &Path) -> Result<Option<(HashMap<String, String>, Vec<String>)>, String> {
+  ensure_plain_file(path, "keybindings.json")?;
+  let meta = match fs::symlink_metadata(path) {
     Ok(meta) => meta,
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
     Err(e) => return Err(format!("keybindings.json can't be read: {e}")),
@@ -160,7 +189,9 @@ fn read_file(path: &PathBuf) -> Result<Option<(HashMap<String, String>, Vec<Stri
   if meta.len() > KEYBINDINGS_LIMIT {
     return Err("keybindings.json is too large (the limit is 1 MB)".into());
   }
-  let file = fs::File::open(path).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
+  // O_NOFOLLOW: the plain-file check above can lose a race with a swapped symlink.
+  let file = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path)
+    .map_err(|e| format!("keybindings.json can't be read: {e}"))?;
   let mut buf = Vec::new();
   file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
   if buf.len() as u64 > KEYBINDINGS_LIMIT {
@@ -178,8 +209,9 @@ fn state_of<R: Runtime>(app: &AppHandle<R>) -> KeybindingState {
   KeybindingState { overrides, problems }
 }
 
-fn mtime(path: &PathBuf) -> Option<SystemTime> {
-  fs::metadata(path).and_then(|m| m.modified()).ok()
+fn mtime(path: &Path) -> Option<SystemTime> {
+  // symlink_metadata: a keybindings path that is a link must not stat the file it points at.
+  fs::symlink_metadata(path).and_then(|m| m.modified()).ok()
 }
 
 // Take in what's on disk: good settings replace the current ones; a broken file leaves the current
@@ -231,18 +263,53 @@ pub fn get_keybindings<R: Runtime>(app: AppHandle<R>) -> KeybindingState {
   state_of(&app)
 }
 
+fn backup_keybindings(src: &Path, dest: &Path) -> Result<(), String> {
+  let file = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(src)
+    .map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
+  let mut buf = Vec::new();
+  // Never copy more than the limit, even if the file grew after the size check.
+  file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
+  if buf.len() as u64 > KEYBINDINGS_LIMIT {
+    return Err("keybindings.json is too large (the limit is 1 MB). Move the file aside before saving shortcuts".into());
+  }
+  crate::write_regular_file(dest, &buf).map_err(|e| format!("couldn't back up keybindings.json: {e}"))
+}
+
+// A hand-edited file that doesn't parse is kept beside the new one, unless copying it would
+// follow a symlink or exceed the size limit.
+fn save_keybindings_file(path: &Path, clean: &HashMap<String, String>) -> Result<(), String> {
+  if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+  }
+  guard_keybindings(path)?;
+  if let Err(err) = read_file(path) {
+    if err.contains("too large") {
+      return Err(format!("{err}. Move the file aside before saving shortcuts"));
+    }
+    backup_keybindings(path, &backup_path(path))?;
+  }
+  let sorted: std::collections::BTreeMap<_, _> = clean.iter().collect(); // stable order for diffs
+  let text = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())? + "\n";
+  crate::write_regular_file(path, text.as_bytes())
+}
+
+fn ensure_keybindings_present(path: &Path) -> Result<bool, String> {
+  guard_keybindings(path)?;
+  if matches!(fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+      fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    crate::write_regular_file(path, b"{\n}\n")?;
+    return Ok(true);
+  }
+  Ok(false)
+}
+
 #[tauri::command]
 pub fn set_keybindings<R: Runtime>(app: AppHandle<R>, overrides: serde_json::Value) -> Result<(), String> {
   let (clean, _) = sanitize(&overrides);
   let path = file_path(&app)?;
-  if let Some(dir) = path.parent() { fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
-  // A hand-edited file that doesn't parse is kept next to the new one rather than lost.
-  if matches!(read_file(&path), Err(_)) {
-    fs::copy(&path, path.with_extension("json.bak")).map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
-  }
-  let sorted: std::collections::BTreeMap<_, _> = clean.iter().collect(); // stable order for diffs
-  let text = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())? + "\n";
-  crate::write_document_trusted(&path, text, false)?;
+  save_keybindings_file(&path, &clean)?;
   let k = app.state::<Keybindings>();
   *k.modified.lock().unwrap() = mtime(&path);
   *k.overrides.lock().unwrap() = clean;
@@ -255,9 +322,7 @@ pub fn set_keybindings<R: Runtime>(app: AppHandle<R>, overrides: serde_json::Val
 pub fn open_keybindings_file<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
   use tauri_plugin_opener::OpenerExt;
   let path = file_path(&app)?;
-  if !path.exists() {
-    if let Some(dir) = path.parent() { fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
-    crate::write_document_trusted(&path, "{\n}\n".into(), false)?;
+  if ensure_keybindings_present(&path)? {
     *app.state::<Keybindings>().modified.lock().unwrap() = mtime(&path);
   }
   app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
@@ -419,5 +484,95 @@ mod tests {
     assert!(clean.is_empty());
     assert!(notes.is_empty());
     let _ = fs::remove_file(path);
+  }
+
+  fn bindings_dir(label: &str) -> PathBuf {
+    let dir = temp_bindings(label);
+    fs::create_dir(&dir).unwrap();
+    dir
+  }
+
+  #[test]
+  fn keybindings_symlink_is_not_followed() {
+    let dir = bindings_dir("link");
+    let path = dir.join("keybindings.json");
+    let secret = dir.join("secret.md");
+    fs::write(&secret, b"secret document").unwrap();
+    std::os::unix::fs::symlink(&secret, &path).unwrap();
+    let err = read_file(&path).unwrap_err();
+    assert!(err.contains("symbolic link"), "{err}");
+    let err = save_keybindings_file(&path, &HashMap::new()).unwrap_err();
+    assert!(err.contains("symbolic link"), "{err}");
+    let err = ensure_keybindings_present(&path).unwrap_err();
+    assert!(err.contains("symbolic link"), "{err}");
+    assert_eq!(fs::read(&secret).unwrap(), b"secret document");
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn keybindings_backup_symlink_is_not_followed() {
+    let dir = bindings_dir("baklink");
+    let path = dir.join("keybindings.json");
+    let secret = dir.join("secret.md");
+    fs::write(&path, b"{not json").unwrap();
+    fs::write(&secret, b"secret document").unwrap();
+    std::os::unix::fs::symlink(&secret, backup_path(&path)).unwrap();
+    let err = save_keybindings_file(&path, &HashMap::new()).unwrap_err();
+    assert!(err.contains("symbolic link"), "{err}");
+    let err = ensure_keybindings_present(&path).unwrap_err();
+    assert!(err.contains("symbolic link"), "{err}");
+    assert_eq!(fs::read(&secret).unwrap(), b"secret document");
+    assert_eq!(fs::read(&path).unwrap(), b"{not json");
+    assert!(fs::symlink_metadata(&backup_path(&path)).unwrap().file_type().is_symlink());
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn keybindings_directory_is_refused() {
+    let dir = bindings_dir("notfile");
+    let path = dir.join("keybindings.json");
+    fs::create_dir(&path).unwrap();
+    let err = read_file(&path).unwrap_err();
+    assert!(err.contains("not a regular file"), "{err}");
+    let err = save_keybindings_file(&path, &HashMap::new()).unwrap_err();
+    assert!(err.contains("not a regular file"), "{err}");
+    let err = ensure_keybindings_present(&path).unwrap_err();
+    assert!(err.contains("not a regular file"), "{err}");
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn oversized_broken_keybindings_are_not_backed_up() {
+    let dir = bindings_dir("huge");
+    let path = dir.join("keybindings.json");
+    fs::write(&path, b"{not json").unwrap();
+    fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(KEYBINDINGS_LIMIT + 1).unwrap();
+    let err = save_keybindings_file(&path, &HashMap::new()).unwrap_err();
+    assert!(err.contains("too large"), "{err}");
+    assert!(err.contains("Move the file aside"), "{err}");
+    assert!(!backup_path(&path).exists());
+    assert!(fs::read(&path).unwrap().starts_with(b"{not json"));
+    assert!(fs::metadata(&path).unwrap().len() > KEYBINDINGS_LIMIT);
+    let bak = dir.join("aside.json");
+    let err = backup_keybindings(&path, &bak).unwrap_err();
+    assert!(err.contains("too large"), "{err}");
+    assert!(err.contains("Move the file aside"), "{err}");
+    assert!(!bak.exists());
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn broken_keybindings_are_backed_up_within_the_limit() {
+    let dir = bindings_dir("broken");
+    let path = dir.join("keybindings.json");
+    fs::write(&path, b"{not json").unwrap();
+    save_keybindings_file(&path, &HashMap::new()).unwrap();
+    let bak = backup_path(&path);
+    assert_eq!(fs::read(&bak).unwrap(), b"{not json");
+    assert!(fs::metadata(&bak).unwrap().len() <= KEYBINDINGS_LIMIT);
+    assert!(serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path).unwrap()).is_ok());
+    assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+    let _ = fs::remove_dir_all(dir);
   }
 }

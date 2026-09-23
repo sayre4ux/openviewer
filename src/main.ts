@@ -1,17 +1,18 @@
 import { history, defaultKeymap, indentWithTab, undo, redo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { forceParsing } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { Compartment, type Extension, type Text } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { lineEndings, makeState, replaceDocument } from "./app/document";
 import { createOutline } from "./app/outline";
-import { localImageCandidate, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
+import { localImageCandidate, resolveClose, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
 import { codeHighlight } from "./editor/codeHighlight";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
 import { imageUrlAllowed, livePreview, refreshImageResolver } from "./editor/livePreview";
-import { formatInCell, insertTable, setCellKeys } from "./editor/tables";
+import { formatInCell, insertTable, setCellKeys, tableRenderStats } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import sample from "./sample.md?raw";
 import { createKeybindingStore } from "./shared/keybindings";
@@ -227,4 +228,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   snapshot: () => doc.snapshot(),
   saved: (next: Text) => doc.saved(next),
   isDirty: () => doc.isDirty(),
+  resolveClose,
+  forceParsing: () => forceParsing(view, view.state.doc.length, 20000),
+  tableRenderStats: () => tableRenderStats(view.state),
 };

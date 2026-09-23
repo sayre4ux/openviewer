@@ -10,7 +10,7 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-set-title",
-    "dialog:default",
+    "dialog:allow-message",
     "opener:allow-open-url",
     "allow-read-document",
     "allow-write-document",

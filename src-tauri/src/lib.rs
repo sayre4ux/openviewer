@@ -1,9 +1,9 @@
 use std::{
   collections::HashSet,
-  ffi::CString,
+  ffi::{CStr, CString, OsStr},
   fs::{self, OpenOptions},
   io::{Read, Write},
-  os::unix::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}},
+  os::unix::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}, io::{AsRawFd, FromRawFd}},
   path::{Path, PathBuf},
   sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex},
 };
@@ -126,20 +126,66 @@ fn too_large(path: &Path, len: u64) -> String {
   format!("{} is too large to open ({mb} MB; the limit is 64 MB)", path_name(path))
 }
 
+#[cfg(test)]
 fn c_path(path: &Path) -> Result<CString, String> {
   CString::new(path.as_os_str().as_bytes()).map_err(|_| "Invalid file path".to_string())
 }
 
-// ACLs and extended attributes (Finder tags included). Mode bits are also applied separately.
-fn copy_metadata(from: &Path, to: &Path) -> Result<(), String> {
-  let from = c_path(from)?;
-  let to = c_path(to)?;
-  let rc = unsafe { libc::copyfile(from.as_ptr(), to.as_ptr(), std::ptr::null_mut(), libc::COPYFILE_METADATA) };
+fn fd_path(fd: std::os::unix::io::RawFd) -> Result<PathBuf, String> {
+  let mut buf = vec![0u8; libc::MAXPATHLEN as usize];
+  let rc = unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr().cast::<libc::c_char>()) };
+  if rc == -1 { return Err(std::io::Error::last_os_error().to_string()); }
+  let len = buf.iter().position(|b| *b == 0).ok_or_else(|| "couldn't read the opened path".to_string())?;
+  Ok(PathBuf::from(OsStr::from_bytes(&buf[..len])))
+}
+
+// DECISION: `O_NOFOLLOW` only rejects a symlink at the final component, so a `/var` → `/private/var`
+// parent still opens. Accept that parent resolution; reject anything whose final name differs.
+fn same_opened_file(requested: &Path, opened: &Path) -> bool {
+  if opened == requested { return true; }
+  let Some(name) = requested.file_name() else { return false };
+  if opened.file_name() != Some(name) { return false; }
+  let Some(parent) = requested.parent().filter(|p| !p.as_os_str().is_empty()) else { return false };
+  fs::canonicalize(parent).ok().is_some_and(|dir| opened == dir.join(name))
+}
+
+// ACLs and extended attributes (Finder tags included), copied fd to fd so a swapped symlink is not followed.
+fn copy_metadata_fd(from: &fs::File, to: &fs::File) -> Result<(), String> {
+  let rc = unsafe { libc::fcopyfile(from.as_raw_fd(), to.as_raw_fd(), std::ptr::null_mut(), libc::COPYFILE_METADATA) };
   if rc == 0 { return Ok(()) }
   let err = std::io::Error::last_os_error();
   // Volumes without ACLs or extended attributes (FAT, some network shares) have none to lose.
   if matches!(err.raw_os_error(), Some(libc::ENOTSUP) | Some(libc::EOPNOTSUPP)) { return Ok(()) }
   Err(format!("couldn't copy file metadata: {err}"))
+}
+
+fn open_existing(dirfd: libc::c_int, name: &CStr) -> Result<Option<fs::File>, String> {
+  let fd = unsafe { libc::openat(dirfd, name.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+  if fd >= 0 { return Ok(Some(unsafe { fs::File::from_raw_fd(fd) })); }
+  let err = std::io::Error::last_os_error();
+  if err.kind() == std::io::ErrorKind::NotFound { return Ok(None); }
+  Err(err.to_string())
+}
+
+fn create_temp(dirfd: libc::c_int, name: &OsStr) -> Result<(CString, fs::File), String> {
+  loop {
+    let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let temp_name = format!(".{}.openviewer-{}-{id}.tmp", name.to_string_lossy(), std::process::id());
+    let temp_c = CString::new(temp_name).map_err(|_| "Invalid file path".to_string())?;
+    // O_CLOEXEC: don't leak the temp fd across exec. O_NOFOLLOW: the name must be the new file, not a link.
+    let fd = unsafe {
+      libc::openat(
+        dirfd,
+        temp_c.as_ptr(),
+        libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0o666 as libc::c_int,
+      )
+    };
+    if fd >= 0 { return Ok((temp_c, unsafe { fs::File::from_raw_fd(fd) })); }
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::AlreadyExists { continue; }
+    return Err(err.to_string());
+  }
 }
 
 #[tauri::command]
@@ -154,7 +200,12 @@ fn read_authorized_document(authorized: &AuthorizedDocuments, path: &Path) -> Re
 
 fn read_document_file(path: &Path) -> Result<Document, String> {
   // O_NONBLOCK: opening a FIFO would otherwise wait forever for a writer.
-  let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path).map_err(|e| e.to_string())?;
+  // O_NOFOLLOW: a symlink swapped in after authorization must not be read.
+  let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW).open(path).map_err(|e| e.to_string())?;
+  let opened = fd_path(file.as_raw_fd())?;
+  if !same_opened_file(path, &opened) {
+    return Err(format!("document changed while opening (opened {}, expected {})", opened.display(), path.display()));
+  }
   let meta = file.metadata().map_err(|e| e.to_string())?;
   let name = path_name(path);
   if meta.is_dir() { return Err(format!("{name} is a directory")); }
@@ -179,42 +230,71 @@ fn write_authorized_document(authorized: &AuthorizedDocuments, path: &Path, text
   write_document_file(&target, text, bom)
 }
 
-pub(crate) fn write_document_trusted(path: &Path, text: String, bom: bool) -> Result<(), String> {
+#[cfg(test)]
+fn write_document_trusted(path: &Path, text: String, bom: bool) -> Result<(), String> {
   let target = canonical_document(path, true)?;
   write_document_file(&target, text, bom)
 }
 
-fn write_document_file(target: &Path, text: String, bom: bool) -> Result<(), String> {
-  // The authorized target is canonical, so replacing it keeps a selected symlink intact.
-  let parent = target.parent().unwrap_or_else(|| Path::new("."));
-  let name = target.file_name().ok_or_else(|| "Invalid file path".to_string())?.to_string_lossy();
-  let existed = fs::metadata(&target).ok();
-  let permissions = existed.as_ref().map(|m| m.permissions());
-  let mut temp_path;
-  let mut file;
-  loop {
-    let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-    temp_path = parent.join(format!(".{name}.openviewer-{}-{id}.tmp", std::process::id()));
-    match OpenOptions::new().write(true).create_new(true).open(&temp_path) {
-      Ok(f) => { file = f; break; }
-      Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-      Err(e) => return Err(e.to_string()),
+// Does not resolve `path`'s final component. Keybindings use this so a symlink is not overwritten.
+pub(crate) fn write_regular_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+  match fs::symlink_metadata(path) {
+    Ok(meta) if meta.file_type().is_symlink() => {
+      return Err(format!("{} is a symbolic link and will not be followed", path_name(path)));
     }
+    Ok(meta) if !meta.is_file() => return Err(format!("{} is not a regular file", path_name(path))),
+    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+    _ => {}
   }
+  let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| "Invalid file path".to_string())?;
+  let name = path.file_name().ok_or_else(|| "Invalid file path".to_string())?;
+  let parent = fs::canonicalize(parent).map_err(|e| e.to_string())?;
+  write_bytes_atomic(&parent.join(name), bytes)
+}
+
+fn write_document_file(target: &Path, text: String, bom: bool) -> Result<(), String> {
+  let mut bytes = Vec::with_capacity(text.len() + if bom { 3 } else { 0 });
+  if bom { bytes.extend_from_slice(&[0xef, 0xbb, 0xbf]); }
+  bytes.extend_from_slice(text.as_bytes());
+  write_bytes_atomic(target, &bytes)
+}
+
+fn write_bytes_atomic(target: &Path, bytes: &[u8]) -> Result<(), String> {
+  // The authorized target is canonical, so replacing it keeps a symlink the user chose intact.
+  // The directory fd is checked with F_GETPATH, and the final name is never followed.
+  let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("/"));
+  let name = target.file_name().ok_or_else(|| "Invalid file path".to_string())?;
+  let dir = OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW).open(parent).map_err(|e| e.to_string())?;
+  let opened_parent = fd_path(dir.as_raw_fd())?;
+  if opened_parent != parent {
+    return Err(format!("document directory changed while opening (opened {}, expected {})", opened_parent.display(), parent.display()));
+  }
+  let dirfd = dir.as_raw_fd();
+  let name_c = CString::new(name.as_bytes()).map_err(|_| "Invalid file path".to_string())?;
+  let existing = open_existing(dirfd, &name_c)?;
+  if let Some(existing) = &existing {
+    let meta = existing.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() { return Err(format!("{} is not a regular file", path_name(target))); }
+  }
+  let (temp_c, mut file) = create_temp(dirfd, name)?;
   let result = (|| {
-    if let Some(perms) = &permissions { file.set_permissions(perms.clone()).map_err(|e| e.to_string())?; }
-    if bom { file.write_all(&[0xef, 0xbb, 0xbf]).map_err(|e| e.to_string())?; }
-    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-    drop(file);
-    if let Some(meta) = &existed {
-      copy_metadata(&target, &temp_path)?;
-      // DECISION: a group we can't set (EPERM) must not fail the save. copyfile reports success anyway.
-      let _ = std::os::unix::fs::chown(&temp_path, None, Some(meta.gid()));
+    if let Some(existing) = &existing {
+      let meta = existing.metadata().map_err(|e| e.to_string())?;
+      file.set_permissions(meta.permissions()).map_err(|e| e.to_string())?;
     }
-    fs::rename(&temp_path, &target).map_err(|e| e.to_string())
+    file.write_all(bytes).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    if let Some(existing) = &existing {
+      copy_metadata_fd(existing, &file)?;
+      let meta = existing.metadata().map_err(|e| e.to_string())?;
+      // DECISION: a group we can't set (EPERM) must not fail the save. fcopyfile reports success anyway.
+      let _ = unsafe { libc::fchown(file.as_raw_fd(), -1i32 as libc::uid_t, meta.gid()) };
+    }
+    let rc = unsafe { libc::renameat(dirfd, temp_c.as_ptr(), dirfd, name_c.as_ptr()) };
+    if rc != 0 { return Err(std::io::Error::last_os_error().to_string()); }
+    Ok(())
   })();
-  if result.is_err() { let _ = fs::remove_file(&temp_path); }
+  if result.is_err() { let _ = unsafe { libc::unlinkat(dirfd, temp_c.as_ptr(), 0) }; }
   result
 }
 
@@ -510,6 +590,62 @@ mod tests {
     assert_eq!(scoped_image_path(&doc, &outside), None);
     assert_eq!(scoped_image_path(&doc, Path::new("link.png")), None);
     let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn swapped_symlink_is_not_followed_on_read_or_write() {
+    // require() hands back a canonical path; read and write open it again. A symlink dropped in
+    // between must fail closed and leave the link target untouched.
+    let dir = path("swap");
+    fs::create_dir(&dir).unwrap();
+    let chosen = dir.join("chosen.md");
+    let other = dir.join("other.md");
+    fs::write(&chosen, "chosen").unwrap();
+    fs::write(&other, "other").unwrap();
+    let canonical = fs::canonicalize(&chosen).unwrap();
+    let paths = AuthorizedDocuments::default();
+    paths.authorize(&canonical, false).unwrap();
+    fs::remove_file(&canonical).unwrap();
+    std::os::unix::fs::symlink(&other, &canonical).unwrap();
+    assert!(read_authorized_document(&paths, &canonical).is_err());
+    assert!(write_authorized_document(&paths, &canonical, "pwned".into(), false).is_err());
+    assert!(read_document_file(&canonical).is_err());
+    assert!(write_document_file(&canonical, "pwned".into(), false).is_err());
+    assert_eq!(fs::read_to_string(&other).unwrap(), "other");
+    assert!(fs::symlink_metadata(&canonical).unwrap().file_type().is_symlink());
+    let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok())
+      .map(|e| e.file_name().to_string_lossy().into_owned())
+      .filter(|n| n.contains("openviewer-")).collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn write_regular_file_does_not_follow_a_symlink() {
+    let dir = path("reglink");
+    fs::create_dir(&dir).unwrap();
+    let secret = dir.join("secret.md");
+    let link = dir.join("link.md");
+    fs::write(&secret, b"secret").unwrap();
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+    let err = write_regular_file(&link, b"pwned").unwrap_err();
+    assert!(err.contains("symbolic link"), "{err}");
+    assert_eq!(fs::read(&secret).unwrap(), b"secret");
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    let plain = dir.join("plain.md");
+    write_regular_file(&plain, b"ok").unwrap();
+    assert_eq!(fs::read(&plain).unwrap(), b"ok");
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn document_dialog_permission_is_message_only() {
+    let document: serde_json::Value = serde_json::from_str(include_str!("../capabilities/documents.json")).unwrap();
+    let docs = document["permissions"].as_array().unwrap();
+    assert!(docs.contains(&serde_json::json!("dialog:allow-message")));
+    for permission in ["dialog:default", "dialog:allow-open", "dialog:allow-save", "dialog:allow-ask", "dialog:allow-confirm"] {
+      assert!(!docs.contains(&serde_json::json!(permission)), "{permission}");
+    }
   }
 
   #[test]
