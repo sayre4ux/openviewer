@@ -22,3 +22,11 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+encoding_rs = "0.8"
+chardetng = "0.1"
+getrandom = "0.3"
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-app-kit"] }
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
+objc2-app-kit = { version = "0.3", features = ["NSPrintOperation", "NSPrintInfo", "NSView", "NSResponder", "NSGraphics"] }

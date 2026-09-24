@@ -25,7 +25,9 @@
     "@lezer/markdown": "^1.7.2",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.3",
-    "@tauri-apps/plugin-opener": "^2.5.5"
+    "@tauri-apps/plugin-opener": "^2.5.5",
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",
