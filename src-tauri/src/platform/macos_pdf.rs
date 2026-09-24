@@ -63,7 +63,7 @@ define_class!(
     fn did_run(&self, _operation: &NSPrintOperation, success: Bool, _context: *mut c_void) {
       // WebKit calls this on its printing thread; the next tick on the main thread picks it up.
       let result = if success.as_bool() { Ok(()) } else { Err("The PDF couldn't be created.".into()) };
-      COMPLETED.lock().unwrap().push((self.ivars().id, result));
+      COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).push((self.ivars().id, result));
     }
   }
 
@@ -130,7 +130,7 @@ fn begin(id: u64, html: &str, out: PathBuf, done: Done, alive: Arc<AtomicBool>) 
 fn tick(id: u64) {
   if MainThreadMarker::new().is_none() { return }
   let completed = {
-    let mut completed = COMPLETED.lock().unwrap();
+    let mut completed = COMPLETED.lock().unwrap_or_else(|e| e.into_inner());
     completed.iter().position(|(done, _)| *done == id).map(|i| completed.remove(i).1)
   };
   if let Some(result) = completed { return finish(id, result) }
@@ -191,6 +191,12 @@ fn print(webview: &WKWebView, window: &NSWindow, out: &std::path::Path, delegate
 fn finish(id: u64, result: Result<(), String>) {
   let Some(job) = JOBS.with_borrow_mut(|jobs| jobs.remove(&id)) else { return };
   job.alive.store(false, Ordering::SeqCst);
-  job.window.close();
   let _ = job.done.send(result);
+  if job.printing.is_some() && COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|(done, _)| *done != id) {
+    // Timed out mid-print: AppKit may still call the delegate and draw the view, so they are kept
+    // alive (leaked) rather than freed under it. This only happens on a stuck print.
+    std::mem::forget(job);
+    return;
+  }
+  job.window.close();
 }

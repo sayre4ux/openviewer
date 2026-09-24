@@ -27,6 +27,11 @@ const hostile = [
   "![lan](http://192.168.1.2/a.png) ![loop](http://127.0.0.1/a.png) ![web](https://example.com/a.png)",
   "![local](assets/pic.png)",
   '<svg><script>window.__pwned = 3</script><circle r="4"/></svg>',
+  '<div style="background-image:url(http://127.0.0.1:8080/a)">css</div> <span style="color: red">kept</span>',
+  '<video poster="http://192.168.1.1/a.png" src="http://192.168.1.1/v.mp4"></video>',
+  '<table background="http://127.0.0.1/a.png"><tr><td>t</td></tr></table>',
+  '<svg><image href="http://127.0.0.1/a.png"/><use href="http://127.0.0.1/s.svg#x"/></svg>',
+  '<img src="https://example.com/b.png" srcset="http://127.0.0.1/a.png 2x">',
 ].join("\n\n");
 const html = await page.evaluate((md) => window.__ov.renderExport(md), hostile);
 const doc = await page.evaluate((h) => {
@@ -42,14 +47,22 @@ const doc = await page.evaluate((h) => {
     missing: Array.from(d.querySelectorAll(".ov-missing-image")).map((s) => s.textContent),
     csp: d.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content") ?? "",
     title: d.title,
+    // Every URL the page could load, from any attribute or inline style.
+    loads: Array.from(d.body.querySelectorAll("*")).flatMap((el) => Array.from(el.attributes)
+      .filter((a) => /^(src|srcset|poster|background|href|xlink:href|style|data)$/i.test(a.name) && !(el.tagName === "A" && a.name === "href"))
+      .map((a) => `${el.tagName.toLowerCase()}[${a.name}]=${a.value}`)),
+    keptStyle: d.querySelector('span[style*="color"]') !== null,
   };
 }, html);
 check("no scripts or handlers survive", doc.scripts === 0 && !doc.handlers, JSON.stringify({ s: doc.scripts, h: doc.handlers }));
 check("javascript: links removed", doc.jsLinks === 0);
 check("iframes, raw styles, and forms removed", doc.iframes === 0 && doc.styles === 0 && doc.forms === 0, JSON.stringify(doc));
 check("image policy: web kept, LAN and loopback dropped, local without Rust dropped",
-  JSON.stringify(doc.imgs) === JSON.stringify(["https://example.com/a.png"]) && doc.missing.join(",") === "image,lan,loop,local",
+  JSON.stringify(doc.imgs) === JSON.stringify(["https://example.com/a.png", "https://example.com/b.png"]) && doc.missing.join(",") === "image,lan,loop,local",
   JSON.stringify({ imgs: doc.imgs, missing: doc.missing }));
+check("nothing else in the page can load a resource",
+  doc.loads.every((l) => /^img\[src\]=https:\/\/example\.com\//.test(l) || l.startsWith("span[style]=color")) && doc.keptStyle,
+  JSON.stringify(doc.loads));
 check("page CSP forbids scripts", doc.csp.startsWith("default-src 'none'") && !doc.csp.includes("script"), doc.csp);
 check("title from the first heading", doc.title === "Hostile", doc.title);
 

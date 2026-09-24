@@ -256,9 +256,10 @@ pub async fn allow_image_folder<R: Runtime>(app: tauri::AppHandle<R>, document_p
 
 // ---------- Pasting and dropping images into a document ----------
 
-// Image files the user dropped on a window, each usable once by `insert_dropped_image`.
+// Image files the user dropped, with the window they were dropped on; each usable once, by that
+// window, through `insert_dropped_image`.
 #[derive(Default)]
-pub struct DroppedImages(pub Mutex<HashSet<PathBuf>>);
+pub struct DroppedImages(pub Mutex<HashMap<PathBuf, String>>);
 
 pub fn droppable_images(paths: &[PathBuf]) -> Vec<PathBuf> {
   paths.iter().filter_map(|p| fs::canonicalize(p).ok()).filter(|p| is_image_file(p)).collect()
@@ -317,8 +318,12 @@ fn store_image(document: &Path, setting: &str, name_hint: &str, bytes: &[u8]) ->
   if let Ok(entries) = fs::read_dir(&folder) {
     for entry in entries.flatten().take(5000) {
       let path = entry.path();
-      let same_size = entry.metadata().is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64);
-      if same_size && has_extension(&path, &[ext.as_str()]) && fs::read(&path).is_ok_and(|b| b == bytes) {
+      if !has_extension(&path, &[ext.as_str()]) { continue; }
+      // Opened without following links, so a symlink in the folder is never read.
+      let Ok(file) = platform::open_for_read(&path) else { continue };
+      if !file.metadata().is_ok_and(|m| m.len() == bytes.len() as u64) { continue; }
+      let mut existing = Vec::with_capacity(bytes.len());
+      if file.take(bytes.len() as u64 + 1).read_to_end(&mut existing).is_ok() && existing == bytes {
         return Ok(path);
       }
     }
@@ -399,6 +404,7 @@ pub async fn insert_image(
 // A file the user dropped on this window. Each drop allows each file once.
 #[tauri::command]
 pub async fn insert_dropped_image(
+  window: tauri::Window,
   document_path: String,
   source: String,
   authorized: tauri::State<'_, AuthorizedDocuments>,
@@ -406,7 +412,11 @@ pub async fn insert_dropped_image(
   dropped: tauri::State<'_, DroppedImages>,
 ) -> Result<InsertedImage, String> {
   let source = fs::canonicalize(&source).map_err(|e| e.to_string())?;
-  if !dropped.0.lock().unwrap().remove(&source) { return Err("That image wasn't dropped on this window.".into()); }
+  {
+    let mut dropped = dropped.0.lock().unwrap();
+    if dropped.get(&source).map(String::as_str) != Some(window.label()) { return Err("That image wasn't dropped on this window.".into()); }
+    dropped.remove(&source);
+  }
   let file = platform::open_for_read(&source)?;
   let mut bytes = Vec::new();
   file.take(IMAGE_LIMIT + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
@@ -571,6 +581,20 @@ mod tests {
     assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
     let _ = fs::remove_dir_all(d);
     let _ = fs::remove_dir_all(elsewhere);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn the_duplicate_check_never_reads_through_a_symlink() {
+    let d = dir("dupelink");
+    let doc = d.join("page.md");
+    fs::write(&doc, "").unwrap();
+    fs::write(d.join("secret.png"), "same bytes").unwrap();
+    fs::create_dir(d.join("assets")).unwrap();
+    std::os::unix::fs::symlink(d.join("secret.png"), d.join("assets/link.png")).unwrap();
+    let stored = store_image(&doc, "assets", "paste.png", b"same bytes").unwrap();
+    assert_eq!(stored, d.join("assets/paste.png"));
+    let _ = fs::remove_dir_all(d);
   }
 
   #[test]

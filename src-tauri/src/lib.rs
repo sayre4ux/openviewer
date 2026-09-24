@@ -160,6 +160,11 @@ pub fn run() {
         return;
       }
       let id = event.id().as_ref();
+      // Every window closes, or asks to save first; Cancel keeps that document open.
+      if id == "quit" {
+        let _ = app.emit("quit-request", ());
+        return;
+      }
       let Some(focused) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false)) else { return };
       // File commands chosen while Preferences is in front go to the last document window;
       // Preferences handles everything else itself (Close, Quit, Undo in its search field).
@@ -194,7 +199,7 @@ pub fn run() {
         // Dropped images are copied next to the document (insert_dropped_image), once each.
         let images = images::droppable_images(paths);
         if !images.is_empty() {
-          app.state::<images::DroppedImages>().0.lock().unwrap().extend(images.iter().cloned());
+          app.state::<images::DroppedImages>().0.lock().unwrap().extend(images.iter().map(|p| (p.clone(), window.label().to_string())));
           let (x, y) = match event {
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { position, .. }) => (position.x, position.y),
             _ => (0.0, 0.0),
@@ -260,7 +265,11 @@ mod tests {
     assert_eq!(preferences["windows"], serde_json::json!(["preferences"]));
     let docs = document["permissions"].as_array().unwrap();
     let prefs = preferences["permissions"].as_array().unwrap();
+    // onCloseRequested in @tauri-apps/api calls destroy() once the handler lets the close go ahead.
     assert!(docs.contains(&serde_json::json!("core:window:allow-destroy")));
+    // Windows never broadcast events: a window could otherwise send "menu" commands to the others.
+    assert!(!docs.contains(&serde_json::json!("core:event:allow-emit")));
+    assert!(!prefs.contains(&serde_json::json!("core:event:allow-emit")));
     assert!(!prefs.contains(&serde_json::json!("core:window:allow-destroy")));
     for permission in ["allow-read-document", "allow-write-document", "allow-create-document-window", "allow-open-dialog", "allow-save-dialog", "allow-resolve-image-path"] {
       assert!(docs.contains(&serde_json::json!(permission)));

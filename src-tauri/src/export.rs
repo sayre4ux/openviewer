@@ -85,7 +85,8 @@ pub async fn render_pdf<R: Runtime>(app: &tauri::AppHandle<R>, html: String) -> 
   let out = dir.join("export.pdf");
   let result = platform::print_to_pdf(app, html, out.clone()).await.and_then(|()| {
     let mut bytes = Vec::new();
-    platform::open_for_read(&out)?.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    platform::open_for_read(&out)?.take(EXPORT_LIMIT as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() > EXPORT_LIMIT { return Err("The PDF is too large.".into()); }
     if bytes.starts_with(b"%PDF") { Ok(bytes) } else { Err("The PDF couldn't be created.".into()) }
   });
   let _ = fs::remove_dir_all(&dir);

@@ -70,10 +70,13 @@ try {
       html: ok("data:text/html,x"),
       abs: ok("/tmp/pic.png"),
       proto: ok("//evil.example/x.png"),
+      cgnat: ok("http://100.64.0.1/x.png") || ok("http://100.127.255.1/x.png"),
+      zeroNet: ok("http://0.1.2.3/x.png"),
+      publicHundred: ok("http://100.128.0.1/x.png"),
     };
   });
   check("image url policy",
-    !hosts.loop && !hosts.lan && !hosts.js && hosts.https && hosts.rel && !hosts.v6 && !hosts.mapped && !hosts.local && !hosts.ten && !hosts.link && !hosts.zero && !hosts.ula && !hosts.ll6 && !hosts.decimal && hosts.data && !hosts.html && hosts.abs && !hosts.proto,
+    !hosts.loop && !hosts.lan && !hosts.js && hosts.https && hosts.rel && !hosts.v6 && !hosts.mapped && !hosts.local && !hosts.ten && !hosts.link && !hosts.zero && !hosts.ula && !hosts.ll6 && !hosts.decimal && hosts.data && !hosts.html && hosts.abs && !hosts.proto && !hosts.cgnat && !hosts.zeroNet && hosts.publicHundred,
     JSON.stringify(hosts));
 
   const localPaths = await page.evaluate(() => {

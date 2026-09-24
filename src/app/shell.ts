@@ -304,7 +304,7 @@ export async function startShell(
 
   const startupPath = new URLSearchParams(location.search).get("path");
   if (startupPath) await openIntoCurrent(startupPath);
-  const { listen, emit } = await import("@tauri-apps/api/event");
+  const { listen } = await import("@tauri-apps/api/event");
   // Menu and open-path events are targeted at this window only (Rust uses emit_to).
   await win.listen<string>("menu", async ({ payload: id }) => {
     switch (id) {
@@ -319,11 +319,6 @@ export async function startShell(
         if (path) await saveTo(path, UTF8);
         else await saveAs();
         break;
-      case "quit": {
-        // DECISION: each window handles its own prompt, so Cancel keeps that document open.
-        await emit("quit-request");
-        break;
-      }
       default:
         commands[id]?.();
     }

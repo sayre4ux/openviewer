@@ -188,10 +188,10 @@ function parseDottedIpv4(host: string): number | null {
 }
 
 function isPrivateV4(ip: number): boolean {
-  if (ip === 0) return true; // 0.0.0.0
   const a = ip >>> 24;
   const b = (ip >>> 16) & 0xff;
-  if (a === 10 || a === 127) return true;
+  if (a === 0 || a === 10 || a === 127) return true; // 0.0.0.0/8 reaches this machine on macOS
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64/10: carrier-grade NAT, Tailscale
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
   if (a === 169 && b === 254) return true;

@@ -73,12 +73,20 @@ cd src-tauri && cargo test
      it was dropped on a window.
    - Folder grants and authorized documents are app-wide, not per window: every window runs the
      same trusted frontend, and a compromised one could already read any authorized document.
+     Dropped images are the exception: each drop is usable only by the window it landed on.
+   - Windows can't emit events (`core:event:allow-emit` is not granted), so one window can't send
+     `menu` commands to another. Quit is broadcast by Rust. `allow-destroy` stays: Tauri's
+     `onCloseRequested` calls `destroy()` after our unsaved-changes prompt.
+   - Known gap: a remote image is checked by host name only. A public URL that redirects, or a name
+     that resolves, to a LAN address still loads. Closing it means fetching remote images in Rust;
+     that waits on the remote-images policy decision.
    - Text files are decoded in Rust (`documents::decode`); NUL bytes without a BOM mean binary and
      are refused. A save that the file's encoding can't hold fails with `unmappable:` rather than
      writing replacement characters.
    - Export (`export.rs`, `src/export/`): Markdown is rendered with marked, sanitized with DOMPurify,
      and only then changed by us (highlighting, embedded images). The page has its own CSP with no
-     scripts. Rust writes only to a target picked in `export_dialog`, once. PDFs are printed by an
+     scripts; tags, attributes, and inline styles that could load a resource are removed, so only
+     `<img src>` (checked with `imageUrlAllowed`, local ones embedded within a 200 MB budget) loads. Rust writes only to a target picked in `export_dialog`, once. PDFs are printed by an
      offscreen WKWebView outside the app (JavaScript off, non-persistent store, no IPC) into a private
      temporary folder, then saved like a document. `OPENVIEWER_PDF_SELFTEST=in.html:out.pdf` (debug
      builds only) prints a page and quits.

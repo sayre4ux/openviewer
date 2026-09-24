@@ -203,11 +203,10 @@ store.onChange((next) => {
 // In the app this window gets menu events while focused: honor Close and Quit, ignore the rest.
 if (native) {
   void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
-    const { listen, emit } = await import("@tauri-apps/api/event");
+    const { listen } = await import("@tauri-apps/api/event");
     const win = getCurrentWindow();
     await win.listen<string>("menu", ({ payload }) => {
       if (payload === "close-window") void win.close();
-      if (payload === "quit") void emit("quit-request"); // every window closes or asks to save
       // The menu takes ⌘Z/⇧⌘Z before the search field sees them.
       if (payload === "undo" || payload === "redo") document.execCommand(payload);
     });

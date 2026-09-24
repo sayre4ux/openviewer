@@ -63,13 +63,32 @@ function isLocal(src: string) {
   return !/^[a-z][a-z0-9+.-]*:/i.test(src) || /^[a-z]:[\\/]/i.test(src) || /^file:/i.test(src);
 }
 
-async function embed(img: HTMLImageElement, options: ExportOptions) {
+// Everything in the page that could load a resource, other than <img src> (checked in `embed`).
+// DECISION: dropped rather than checked; a Markdown export has no use for video, SVG references, or
+// CSS images, and each would be another way to reach the network.
+const FORBID_TAGS = ["style", "form", "button", "textarea", "select", "video", "audio", "source", "track",
+  "picture", "object", "embed", "image", "feImage", "use", "link", "meta", "base"];
+const FORBID_ATTR = ["srcset", "poster", "background", "lowsrc", "dynsrc", "ping", "action", "formaction", "xlink:href", "cite", "longdesc"];
+const cssLoads = /url\s*\(|image-set\s*\(|@import|expression\s*\(|\\/i;
+
+// Budget for embedded image bytes, so a document that repeats a large image can't exhaust memory.
+const EMBED_BUDGET = 200 * 1024 * 1024;
+
+async function embed(img: HTMLImageElement, options: ExportOptions, cache: Map<string, string | null>, budget: { left: number }) {
   const src = img.getAttribute("src") ?? "";
   img.removeAttribute("srcset");
   let url: string | null = null;
   if (/^data:image\//i.test(src)) url = src;
   else if (/^https?:\/\//i.test(src)) url = options.remoteAllowed(src) ? src : null;
-  else if (isLocal(src) && src) url = await options.embedImage(src.replace(/^file:\/\//i, ""));
+  else if (isLocal(src) && src) {
+    const local = src.replace(/^file:\/\//i, "");
+    if (!cache.has(local)) {
+      const data = budget.left > 0 ? await options.embedImage(local) : null;
+      budget.left -= data?.length ?? 0;
+      cache.set(local, data && budget.left >= 0 ? data : null);
+    }
+    url = cache.get(local) ?? null;
+  }
   if (url) {
     img.setAttribute("src", url);
     return;
@@ -95,20 +114,22 @@ const PAGE_CSP = "default-src 'none'; img-src data: https: http:; style-src 'uns
 
 export async function renderExport(markdown: string, options: ExportOptions): Promise<string> {
   const html = marked.parse(markdown) as string;
-  const body = DOMPurify.sanitize(html, {
-    RETURN_DOM_FRAGMENT: true,
-    // DECISION: raw <style> and forms would fight the export's look; the rest of safe HTML is kept.
-    FORBID_TAGS: ["style", "form", "button", "textarea", "select"],
+  const purify = DOMPurify();
+  // Inline styles stay (colors, alignment) unless they could load something.
+  purify.addHook("uponSanitizeAttribute", (_node, data) => {
+    if (data.attrName === "style" && cssLoads.test(data.attrValue)) data.keepAttr = false;
   });
+  const body = purify.sanitize(html, { RETURN_DOM_FRAGMENT: true, FORBID_TAGS, FORBID_ATTR });
   // Only disabled task-list checkboxes survive as inputs.
   for (const input of body.querySelectorAll("input")) {
     if (input.type !== "checkbox") input.remove();
     else input.setAttribute("disabled", "");
   }
-  await Promise.all([
-    ...Array.from(body.querySelectorAll<HTMLElement>("pre > code")).map(highlight),
-    ...Array.from(body.querySelectorAll("img")).map((img) => embed(img, options)),
-  ]);
+  await Promise.all(Array.from(body.querySelectorAll<HTMLElement>("pre > code")).map(highlight));
+  // One image at a time, each source once, within the budget.
+  const cache = new Map<string, string | null>();
+  const budget = { left: EMBED_BUDGET };
+  for (const img of Array.from(body.querySelectorAll("img"))) await embed(img, options, cache, budget);
   const title = body.querySelector("h1")?.textContent?.trim() || options.name || "Untitled";
   const holder = document.createElement("div");
   holder.append(body);
