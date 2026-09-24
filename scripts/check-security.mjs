@@ -124,6 +124,18 @@ try {
     window.__ov.insertImages("![x](a.png)", 7);
     return window.__ov.view.state.doc.toString();
   });
+  // Images that resolve asynchronously (the app asks Rust) still appear, and blocked ones say so.
+  const asyncImages = await page.evaluate(async () => {
+    const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    window.__ov.useAsyncImages(80);
+    window.__ov.load(`# A\n\n![ok](${png})\n\n![no](blocked.png)\n\ntext\n`);
+    await new Promise((r) => setTimeout(r, 400));
+    const img = document.querySelector(".cm-md-image");
+    const result = { loaded: img?.complete && img.naturalWidth > 0, blocked: document.querySelectorAll(".cm-md-image-blocked").length };
+    window.__ov.useAsyncImages(null);
+    return result;
+  });
+  check("asynchronously resolved images appear", asyncImages.loaded === true && asyncImages.blocked === 1, JSON.stringify(asyncImages));
   check("an image pasted mid-line adds no line break", midLine === "before ![x](a.png)after\n", JSON.stringify(midLine));
 
   check("image paths: percent-encoding, <...>, Windows, pasted names",

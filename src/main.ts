@@ -12,7 +12,7 @@ import { isInsertableImage, pastedImageName } from "./app/imageNames";
 import { codeHighlight } from "./editor/codeHighlight";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
-import { imageUrlAllowed, livePreview, refreshImageResolver } from "./editor/livePreview";
+import { imageUrlAllowed, livePreview, refreshImageResolver, setImageResolver } from "./editor/livePreview";
 import { formatInCell, insertTable, setCellKeys, tableRenderStats } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import sample from "./sample.md?raw";
@@ -259,6 +259,14 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   localImageCandidate,
   pastedImageName,
   insertImages: (markdown: string, at?: number) => doc.insertImages(markdown, at),
+  // Resolve images after a delay, as the app does through Rust ("blocked" sources resolve to null);
+  // null goes back to the browser build's immediate resolver.
+  useAsyncImages: (delay: number | null) => {
+    setImageResolver(delay === null
+      ? (src) => src
+      : (src) => new Promise((resolve) => setTimeout(() => resolve(src.includes("blocked") ? null : src), delay)));
+    refreshImageResolver(view);
+  },
   // Renders an export page; local images come back as their alt text (there's no Rust here).
   renderExport: async (markdown: string, withFonts = false) => {
     const { renderExport, loadFonts } = await import("./export/render");

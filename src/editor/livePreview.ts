@@ -80,22 +80,26 @@ class ImageWidget extends WidgetType {
     return other.src === this.src && other.alt === this.alt && other.resolverVersion === this.resolverVersion;
   }
   toDOM() {
+    // The widget's root stays put and only its contents change: CodeMirror restores its own node if
+    // the root is swapped out, which left an empty line once an image resolved asynchronously.
+    const slot = document.createElement("span");
+    slot.className = "cm-md-image-slot";
     const image = (src: string) => {
       const img = document.createElement("img");
       img.className = "cm-md-image";
       img.alt = this.alt;
-      img.addEventListener("error", () => img.replaceWith(blockedImageNode(this.alt)), { once: true });
+      img.addEventListener("error", () => slot.replaceChildren(blockedImageNode(this.alt)), { once: true });
       img.src = src;
       return img;
     };
-    const show = (r: ResolvedImage) => (typeof r === "string" ? image(r) : blockedImageNode(this.alt, r ?? undefined));
+    const show = (r: ResolvedImage) => slot.replaceChildren(typeof r === "string" ? image(r) : blockedImageNode(this.alt, r ?? undefined));
     const resolved = resolveImage(this.src);
     if (resolved instanceof Promise) {
-      const pending = document.createElement("span");
-      void resolved.then((r) => pending.replaceWith(show(r))).catch(() => pending.replaceWith(blockedImageNode(this.alt)));
-      return pending;
+      void resolved.then(show).catch(() => slot.replaceChildren(blockedImageNode(this.alt)));
+    } else {
+      show(resolved);
     }
-    return show(resolved);
+    return slot;
   }
 }
 
