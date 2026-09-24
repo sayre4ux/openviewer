@@ -2,7 +2,7 @@
 // where shortcuts live in localStorage instead of keybindings.json).
 // Usage: node scripts/check-prefs.mjs [outDir] [chromium|webkit]
 import { chromium, webkit } from "playwright";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 
 const out = process.argv[2] ?? "shots";
 const engine = process.argv[3] ?? "chromium";
@@ -22,7 +22,7 @@ const overrides = () => page.evaluate(() => JSON.parse(localStorage.getItem("ope
 const row = (label) => page.locator(".prefs-row", { has: page.locator(".prefs-label", { hasText: new RegExp(`^${label}$`) }) });
 const record = async (label, keys) => { await row(label).locator(".prefs-key").click(); await settle(); await page.keyboard.press(keys); await settle(); };
 
-check("lists every command", (await page.locator(".prefs-row").count()) === 23, String(await page.locator(".prefs-row").count()));
+check("lists every command", (await page.locator(".prefs-row").count()) === JSON.parse(readFileSync("src/shared/commands.json", "utf8")).length, String(await page.locator(".prefs-row").count()));
 check("shows default keys", (await row("Save").locator("kbd").textContent()) === "⌘S", await row("Save").locator("kbd").textContent());
 await page.screenshot({ path: `${out}/p1-default.png` });
 

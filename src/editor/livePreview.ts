@@ -88,14 +88,14 @@ class ImageWidget extends WidgetType {
       img.src = src;
       return img;
     };
+    const show = (r: ResolvedImage) => (typeof r === "string" ? image(r) : blockedImageNode(this.alt, r ?? undefined));
     const resolved = resolveImage(this.src);
     if (resolved instanceof Promise) {
       const pending = document.createElement("span");
-      void resolved.then((src) => pending.replaceWith(src ? image(src) : blockedImageNode(this.alt)))
-        .catch(() => pending.replaceWith(blockedImageNode(this.alt)));
+      void resolved.then((r) => pending.replaceWith(show(r))).catch(() => pending.replaceWith(blockedImageNode(this.alt)));
       return pending;
     }
-    return resolved ? image(resolved) : blockedImageNode(this.alt);
+    return show(resolved);
   }
 }
 
@@ -111,7 +111,14 @@ class BlockedImageWidget extends WidgetType {
   }
 }
 
-function blockedImageNode(altText: string) {
+// A blocked local image the user may allow: its folder, for this document, after a native prompt.
+export interface BlockedImage {
+  folder: string;
+  allow: () => Promise<boolean>;
+}
+type ResolvedImage = string | null | BlockedImage;
+
+function blockedImageNode(altText: string, offer?: BlockedImage) {
   const el = document.createElement("span");
   el.className = "cm-md-image-blocked";
   if (altText) {
@@ -124,6 +131,19 @@ function blockedImageNode(altText: string) {
   note.className = "cm-md-image-blocked-note";
   note.textContent = "image blocked";
   el.appendChild(note);
+  if (offer) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cm-md-image-allow";
+    const name = offer.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || offer.folder;
+    button.textContent = `Show images from “${name}”…`;
+    button.title = offer.folder;
+    button.addEventListener("mousedown", (e) => {
+      e.preventDefault(); // keep the editor selection where it is
+      void offer.allow();
+    });
+    el.appendChild(button);
+  }
   return el;
 }
 
@@ -459,9 +479,9 @@ function buildDecorations(view: EditorView): DecorationSet {
 
 // Relative image paths resolve against the open file's folder. The spike has no file,
 // so this is a hook the Tauri shell replaces.
-let imageResolver: (src: string) => string | null | Promise<string | null> = (src) => src;
+let imageResolver: (src: string) => ResolvedImage | Promise<ResolvedImage> = (src) => src;
 let imageResolverVersion = 0;
-export function setImageResolver(fn: (src: string) => string | null | Promise<string | null>) {
+export function setImageResolver(fn: (src: string) => ResolvedImage | Promise<ResolvedImage>) {
   imageResolver = fn;
   imageResolverVersion++;
 }

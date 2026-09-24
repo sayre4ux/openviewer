@@ -49,7 +49,8 @@ check("editor renders under CSP", serif && highlighted > 0, `PT Serif ${serif}, 
 
 await page.goto(base + "preferences.html");
 await page.waitForSelector(".prefs-row");
-check("preferences render under CSP", (await page.locator(".prefs-row").count()) === 23);
+const commandCount = JSON.parse(await readFile("src/shared/commands.json", "utf8")).length;
+check("preferences render under CSP", (await page.locator(".prefs-row").count()) === commandCount);
 
 check("no CSP violations", violations.length === 0, violations.join(" | "));
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);

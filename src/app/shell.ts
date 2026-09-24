@@ -8,7 +8,9 @@ export interface ShellDocument {
   setBom(value: boolean): void;
   isDirty(): boolean;
   isUntouched(): boolean;
-  load(text: string, path: string, bom: boolean): void;
+  load(text: string, path: string, bom: boolean, encoding: string): void;
+  getEncoding(): string;
+  setEncoding(encoding: string): void;
   // text is what gets written; doc is the editor state that write came from.
   snapshot(): { text: string; doc: Text };
   saved(doc: Text): void;
@@ -16,6 +18,10 @@ export interface ShellDocument {
   onChange(callback: () => void): void;
 }
 
+// What Rust returns for a local image (see images.rs `Resolution`).
+type Resolution = { status: "ok"; url: string } | { status: "blocked"; folder: string | null };
+// Rust prefixes save errors with this when the file's encoding can't hold some characters.
+const UNMAPPABLE = "unmappable:";
 const SAVE = "Save";
 const DISCARD = "Don’t Save";
 
@@ -38,11 +44,33 @@ export async function resolveClose(
 }
 
 // A local image's absolute path, normalized. Not a security check: Rust (`resolve_image_path`)
-// decides which files a document may show.
+// decides which files a document may show. Handles percent-encoding (Typora writes `my%20shot.png`),
+// `<...>` destinations, and Windows drive paths.
 export function localImageCandidate(source: string, documentPath: string): string | null {
-  const normalized = source.replace(/\\/g, "/");
-  const parts = normalized.startsWith("/") ? [] : documentPath.replace(/\/[^/]*$/, "").split("/").filter(Boolean);
-  for (const part of normalized.split("/")) {
+  let raw = source.trim();
+  if (raw.startsWith("<") && raw.endsWith(">")) raw = raw.slice(1, -1);
+  try {
+    raw = decodeURI(raw);
+  } catch {
+    // Not valid percent-encoding: use it as written.
+  }
+  const src = raw.replace(/\\/g, "/");
+  const doc = documentPath.replace(/\\/g, "/");
+  const driveOf = (p: string) => /^[A-Za-z]:\//.exec(p)?.[0] ?? null;
+  let root: string;
+  let parts: string[];
+  let rest: string;
+  if (src.startsWith("/")) {
+    [root, parts, rest] = ["/", [], src];
+  } else if (driveOf(src)) {
+    root = driveOf(src)!;
+    [parts, rest] = [[], src.slice(root.length)];
+  } else {
+    root = driveOf(doc) ?? "/";
+    parts = doc.slice(root.length).replace(/\/[^/]*$/, "").split("/").filter(Boolean);
+    rest = src;
+  }
+  for (const part of rest.split("/")) {
     if (!part || part === ".") continue;
     if (part === "..") {
       if (parts.length === 0) return null;
@@ -51,7 +79,7 @@ export function localImageCandidate(source: string, documentPath: string): strin
       parts.push(part);
     }
   }
-  return parts.length ? `/${parts.join("/")}` : null;
+  return parts.length ? root + parts.join("/") : null;
 }
 
 // View-menu checkmarks, mirrored from the focused window's modes.
@@ -72,7 +100,7 @@ export async function startShell(
   const invoke = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   if (!invoke) return;
 
-  const [{ invoke: call, convertFileSrc }, { getCurrentWindow }, { message }, { openUrl }] = await Promise.all([
+  const [{ invoke: call }, { getCurrentWindow }, { message }, { openUrl }] = await Promise.all([
     import("@tauri-apps/api/core"), import("@tauri-apps/api/window"),
     import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-opener"),
   ]);
@@ -89,14 +117,25 @@ export async function startShell(
     // Taken before the await: keystrokes during a slow write must stay unsaved.
     const snap = doc.snapshot();
     try {
-      await call("write_document", { path: target, text: snap.text, bom: doc.getBom() });
+      await call("write_document", { path: target, text: snap.text, bom: doc.getBom(), encoding: doc.getEncoding() });
       path = target;
       doc.saved(snap.doc);
       doc.refreshImages();
       title();
       return true;
     } catch (error) {
-      await message(String(error), { title: "Couldn’t save document", kind: "error" });
+      const text = String(error);
+      if (text.startsWith(UNMAPPABLE)) {
+        // The file's encoding (e.g. Big5) can't hold something that was typed: offer UTF-8 instead.
+        const choice = await message(`${text.slice(UNMAPPABLE.length)} Save “${target.split(/[\\/]/).pop()}” as UTF-8 instead?`, {
+          title: "Can’t Save in This Encoding", kind: "warning", buttons: { ok: "Save as UTF-8", cancel: "Cancel" },
+        });
+        if (choice !== "Save as UTF-8" && choice !== "Ok") return false;
+        doc.setEncoding("UTF-8");
+        doc.setBom(false);
+        return saveTo(target);
+      }
+      await message(text, { title: "Couldn’t save document", kind: "error" });
       return false;
     }
   };
@@ -114,11 +153,17 @@ export async function startShell(
   const openIntoCurrent = async (target: string): Promise<void> => {
     let text: string;
     try {
-      const file = await call<{ text: string; bom: boolean; path: string }>("read_document", { path: target });
+      const file = await call<{ text: string; bom: boolean; encoding: string; exact: boolean; path: string }>("read_document", { path: target });
       text = file.text;
       path = file.path;
-      doc.load(file.text, file.path, file.bom);
+      doc.load(file.text, file.path, file.bom, file.encoding);
       title();
+      if (!file.exact) {
+        await message(
+          `This file is in ${file.encoding}, and some of its bytes can't be written back exactly. Saving may change them.`,
+          { title: "Text Encoding", kind: "warning" },
+        );
+      }
     } catch (error) {
       await message(String(error), { title: "Couldn’t open document", kind: "error" });
       return;
@@ -159,11 +204,25 @@ export async function startShell(
   setImageResolver((src) => {
     if (/^(https?:|data:)/i.test(src)) return src;
     if (!path) return null;
-    // DECISION: local images outside the document folder render the blocked placeholder.
-    const candidate = localImageCandidate(src, path);
+    const documentPath = path;
+    const candidate = localImageCandidate(src, documentPath);
     if (!candidate) return null;
-    return call<string | null>("resolve_image_path", { documentPath: path, source: candidate })
-      .then((allowed) => allowed ? convertFileSrc(allowed) : null);
+    return call<Resolution>("resolve_image_path", { documentPath, source: candidate }).then((r) => {
+      if (r.status === "ok") return r.url;
+      if (!r.folder) return null;
+      // Outside what the document may show, but the user can allow that folder for this document.
+      return {
+        folder: r.folder,
+        allow: async () => {
+          const ok = await call<boolean>("allow_image_folder", { documentPath, source: candidate }).catch(async (error) => {
+            await message(String(error), { title: "Couldn’t show images", kind: "error" });
+            return false;
+          });
+          if (ok) doc.refreshImages();
+          return ok;
+        },
+      };
+    });
   });
 
   const startupPath = new URLSearchParams(location.search).get("path");
@@ -177,6 +236,11 @@ export async function startShell(
       case "save": await save(); break;
       case "save-as": await saveAs(); break;
       case "close-window": await win.close(); break;
+      case "save-as-utf8":
+        doc.setEncoding("UTF-8");
+        doc.setBom(false);
+        await save();
+        break;
       case "quit": {
         // DECISION: each window handles its own prompt, so Cancel keeps that document open.
         await emit("quit-request");

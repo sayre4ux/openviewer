@@ -89,6 +89,24 @@ try {
       outsideBackslash: candidate("..\\secret.png", doc),
     };
   });
+  const decoded = await page.evaluate(() => {
+    const c = window.__ov.localImageCandidate;
+    return {
+      encoded: c("assets/my%20shot.png", "/Users/example/Notes/page.md"),
+      angle: c("<assets/my shot.png>", "/Users/example/Notes/page.md"),
+      badEscape: c("a%zz.png", "/Users/example/Notes/page.md"),
+      windowsRelative: c("..\\img\\a.png", "C:\\Users\\me\\Docs\\page.md"),
+      windowsAbsolute: c("D:/pics/b.png", "C:\\Users\\me\\Docs\\page.md"),
+    };
+  });
+  check("image paths: percent-encoding, <...>, Windows",
+    decoded.encoded === "/Users/example/Notes/assets/my shot.png" &&
+    decoded.angle === "/Users/example/Notes/assets/my shot.png" &&
+    decoded.badEscape === "/Users/example/Notes/a%zz.png" &&
+    decoded.windowsRelative === "C:/Users/me/img/a.png" &&
+    decoded.windowsAbsolute === "D:/pics/b.png",
+    JSON.stringify(decoded));
+
   // The prefilter only normalizes; the folder/repository boundary is enforced in Rust (cargo tests).
   check("local image paths are normalized",
     localPaths.relative === "/Users/example/Notes/images/pic.png" &&

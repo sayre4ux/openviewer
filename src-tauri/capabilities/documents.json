@@ -24,6 +24,7 @@
     "allow-open-dialog",
     "allow-save-dialog",
     "allow-resolve-image-path",
+    "allow-allow-image-folder",
     "allow-get-keybindings"
   ]
 }

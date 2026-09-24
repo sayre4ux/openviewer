@@ -61,7 +61,9 @@ let modesChanged: () => void = () => undefined;
 const outlineHost = document.getElementById("outline")!;
 const statusEl = document.getElementById("status")!;
 const outline = createOutline(outlineHost);
-const wordCount = createWordCount(statusEl);
+// The file's text encoding; only shown when it isn't UTF-8.
+let encoding = "UTF-8";
+const wordCount = createWordCount(statusEl, () => (encoding === "UTF-8" ? "" : encoding));
 const native = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 function extensionsForDocument(): Extension[] {
   return [
@@ -94,7 +96,8 @@ const view = new EditorView({
 let savedDoc = view.state.doc;
 let currentPath: string | null = null;
 let hasBom = false;
-const load = (text: string, path: string | null = null, bom = false) => {
+const load = (text: string, path: string | null = null, bom = false, fileEncoding = "UTF-8") => {
+  encoding = fileEncoding;
   replaceDocument(view, text, extensionsForDocument());
   savedDoc = view.state.doc;
   currentPath = path;
@@ -194,6 +197,11 @@ const doc: ShellDocument = {
   getText: () => view.state.sliceDoc(),
   getBom: () => hasBom,
   setBom: (value) => { hasBom = value; },
+  getEncoding: () => encoding,
+  setEncoding: (value) => {
+    encoding = value;
+    wordCount.refresh();
+  },
   isDirty: () => !view.state.doc.eq(savedDoc),
   isUntouched: () => currentPath === null && view.state.doc.length === 0 && view.state.doc.eq(savedDoc),
   load,
@@ -219,7 +227,7 @@ void startShell(doc, commands, () => ({ ...modes }), (notify) => {
 if (!native) (window as unknown as { __ov: unknown }).__ov = {
   view,
   source: sample,
-  load: (text: string) => load(text),
+  load: (text: string, fileEncoding?: string) => load(text, null, false, fileEncoding),
   commands,
   modes,
   lineEndings,

@@ -15,7 +15,8 @@ export function countWords(text: string) {
 
 const format = (n: number) => n.toLocaleString("en-US");
 
-export function createWordCount(el: HTMLElement) {
+// `prefix` names something about the file worth seeing next to the count (a non-UTF-8 encoding).
+export function createWordCount(el: HTMLElement, prefix: () => string = () => "") {
   let total = 0;
   let timer = 0;
   let view: EditorView | null = null;
@@ -24,9 +25,11 @@ export function createWordCount(el: HTMLElement) {
     if (!view) return;
     const sel = view.state.selection.main;
     const label = total === 1 ? "word" : "words";
-    el.textContent = sel.empty
+    const count = sel.empty
       ? `${format(total)} ${label}`
       : `${format(countWords(view.state.sliceDoc(sel.from, sel.to)))} of ${format(total)} ${label}`;
+    const note = prefix();
+    el.textContent = note ? `${note} · ${count}` : count;
     el.title = `${format(view.state.doc.length)} characters · about ${Math.max(1, Math.round(total / 230))} min read`;
   };
   const recount = () => {

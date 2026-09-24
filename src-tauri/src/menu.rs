@@ -7,7 +7,6 @@ use std::{
   collections::HashMap,
   fs,
   io::Read,
-  os::unix::fs::OpenOptionsExt,
   path::{Path, PathBuf},
   sync::Mutex,
   time::SystemTime,
@@ -189,9 +188,8 @@ fn read_file(path: &Path) -> Result<Option<(HashMap<String, String>, Vec<String>
   if meta.len() > KEYBINDINGS_LIMIT {
     return Err("keybindings.json is too large (the limit is 1 MB)".into());
   }
-  // O_NOFOLLOW: the plain-file check above can lose a race with a swapped symlink.
-  let file = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path)
-    .map_err(|e| format!("keybindings.json can't be read: {e}"))?;
+  // The plain-file check above can lose a race with a swapped symlink; open_for_read can't.
+  let file = crate::platform::open_for_read(path).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
   let mut buf = Vec::new();
   file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
   if buf.len() as u64 > KEYBINDINGS_LIMIT {
@@ -264,15 +262,14 @@ pub fn get_keybindings<R: Runtime>(app: AppHandle<R>) -> KeybindingState {
 }
 
 fn backup_keybindings(src: &Path, dest: &Path) -> Result<(), String> {
-  let file = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(src)
-    .map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
+  let file = crate::platform::open_for_read(src).map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
   let mut buf = Vec::new();
   // Never copy more than the limit, even if the file grew after the size check.
   file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
   if buf.len() as u64 > KEYBINDINGS_LIMIT {
     return Err("keybindings.json is too large (the limit is 1 MB). Move the file aside before saving shortcuts".into());
   }
-  crate::write_regular_file(dest, &buf).map_err(|e| format!("couldn't back up keybindings.json: {e}"))
+  crate::documents::write_regular_file(dest, &buf).map_err(|e| format!("couldn't back up keybindings.json: {e}"))
 }
 
 // A hand-edited file that doesn't parse is kept beside the new one, unless copying it would
@@ -290,7 +287,7 @@ fn save_keybindings_file(path: &Path, clean: &HashMap<String, String>) -> Result
   }
   let sorted: std::collections::BTreeMap<_, _> = clean.iter().collect(); // stable order for diffs
   let text = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())? + "\n";
-  crate::write_regular_file(path, text.as_bytes())
+  crate::documents::write_regular_file(path, text.as_bytes())
 }
 
 fn ensure_keybindings_present(path: &Path) -> Result<bool, String> {
@@ -299,7 +296,7 @@ fn ensure_keybindings_present(path: &Path) -> Result<bool, String> {
     if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
       fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    crate::write_regular_file(path, b"{\n}\n")?;
+    crate::documents::write_regular_file(path, b"{\n}\n")?;
     return Ok(true);
   }
   Ok(false)
@@ -492,6 +489,7 @@ mod tests {
     dir
   }
 
+  #[cfg(unix)]
   #[test]
   fn keybindings_symlink_is_not_followed() {
     let dir = bindings_dir("link");
@@ -510,6 +508,7 @@ mod tests {
     let _ = fs::remove_dir_all(dir);
   }
 
+  #[cfg(unix)]
   #[test]
   fn keybindings_backup_symlink_is_not_followed() {
     let dir = bindings_dir("baklink");
