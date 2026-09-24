@@ -16,8 +16,8 @@ export interface ShellDocument {
   snapshot(): { text: string; doc: Text };
   saved(doc: Text): void;
   refreshImages(): void;
-  // Insert text at a document position (or the selection) as one undoable edit.
-  insertText(text: string, at?: number | null): void;
+  // Insert image links at a document position (or the selection) as one undoable edit.
+  insertImages(markdown: string, at?: number | null): void;
   // The document position under a point in window coordinates (CSS pixels), if any.
   positionAt(x: number, y: number): number | null;
   // Image files pasted into the editor are handed to this (Tauri only).
@@ -215,7 +215,7 @@ export async function startShell(
         await message(String(error), { title: "Couldn’t add the image", kind: "error" });
       }
     }
-    if (links.length) doc.insertText(links.join(" "));
+    if (links.length) doc.insertImages(links.join(" "));
   };
   doc.onImagePaste((files) => void insertImages(files));
 
@@ -360,7 +360,7 @@ export async function startShell(
         await message(String(error), { title: "Couldn’t add the image", kind: "error" });
       }
     }
-    if (links.length) doc.insertText(links.join(" "), at);
+    if (links.length) doc.insertImages(links.join(" "), at);
   });
   await win.listen<string[]>("authorized-drop", async ({ payload: paths }) => {
     for (const dropped of paths) {

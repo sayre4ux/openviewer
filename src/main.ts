@@ -209,10 +209,14 @@ const doc: ShellDocument = {
   getText: () => view.state.sliceDoc(),
   getBom: () => hasBom,
   setBom: (value) => { hasBom = value; },
-  insertText: (text, at) => {
-    const pos = at ?? view.state.selection.main.head;
-    const { from, to } = at == null ? view.state.selection.main : { from: pos, to: pos };
-    view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent: "input", scrollIntoView: true });
+  insertImages: (markdown, at) => {
+    const { state } = view;
+    const { from, to } = at == null ? state.selection.main : { from: at, to: at };
+    // An image touching the caret shows as its Markdown source. When nothing follows on the line,
+    // the caret goes to a new line below, so the image shows right away, as in Typora.
+    const line = state.doc.lineAt(to);
+    const insert = state.sliceDoc(to, line.to).trim() === "" ? markdown + state.lineBreak : markdown;
+    view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input", scrollIntoView: true });
     view.focus();
   },
   positionAt: (x, y) => view.posAtCoords({ x, y }),
@@ -254,6 +258,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   imageUrlAllowed,
   localImageCandidate,
   pastedImageName,
+  insertImages: (markdown: string, at?: number) => doc.insertImages(markdown, at),
   // Renders an export page; local images come back as their alt text (there's no Rust here).
   renderExport: async (markdown: string, withFonts = false) => {
     const { renderExport, loadFonts } = await import("./export/render");

@@ -109,6 +109,23 @@ try {
       ].join(","),
     };
   });
+  // A pasted image at the end of a line shows at once: the caret moves below it instead of touching it.
+  const pasted = await page.evaluate(async () => {
+    window.__ov.load("Here:\n");
+    const v = window.__ov.view;
+    v.dispatch({ selection: { anchor: v.state.doc.length } });
+    window.__ov.insertImages("![shot](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==)");
+    await new Promise((r) => setTimeout(r, 200));
+    return { rendered: document.querySelectorAll(".cm-md-image").length, text: v.state.doc.toString(), caretLine: v.state.doc.lineAt(v.state.selection.main.head).number };
+  });
+  check("a pasted image renders right away", pasted.rendered === 1 && pasted.caretLine === 3 && pasted.text.endsWith(")\n"), JSON.stringify(pasted));
+  const midLine = await page.evaluate(() => {
+    window.__ov.load("before after\n");
+    window.__ov.insertImages("![x](a.png)", 7);
+    return window.__ov.view.state.doc.toString();
+  });
+  check("an image pasted mid-line adds no line break", midLine === "before ![x](a.png)after\n", JSON.stringify(midLine));
+
   check("image paths: percent-encoding, <...>, Windows, pasted names",
     decoded.encoded === "/Users/example/Notes/assets/my shot.png" &&
     decoded.angle === "/Users/example/Notes/assets/my shot.png" &&
