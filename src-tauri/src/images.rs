@@ -328,15 +328,21 @@ fn store_image(document: &Path, setting: &str, name_hint: &str, bytes: &[u8]) ->
       }
     }
   }
+  // Only a new file counts against the session quota, and only once it is written.
+  take_quota(bytes.len() as u64)?;
   for n in 0..1000 {
     let name = if n == 0 { format!("{stem}.{ext}") } else { format!("{stem}-{n}.{ext}") };
     let target = folder.join(&name);
     match platform::create_file(&target, bytes) {
       Ok(()) => return Ok(target),
       Err(e) if e.starts_with(platform::EXISTS) => continue,
-      Err(e) => return Err(e),
+      Err(e) => {
+        release_quota(bytes.len() as u64);
+        return Err(e);
+      }
     }
   }
+  release_quota(bytes.len() as u64);
   Err("Couldn't find a free file name for the image.".into())
 }
 
@@ -361,14 +367,22 @@ const SESSION_FILES: u64 = 5000;
 static INSERTED_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static INSERTED_FILES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// Reserves room for one new file; `release_quota` gives it back if the file isn't written.
 fn take_quota(len: u64) -> Result<(), String> {
   use std::sync::atomic::Ordering::SeqCst;
   let files = INSERTED_FILES.fetch_add(1, SeqCst);
   let bytes = INSERTED_BYTES.fetch_add(len, SeqCst);
   if files >= SESSION_FILES || bytes + len > SESSION_BYTES {
+    release_quota(len);
     return Err("Too many images were added in this session. Restart OpenViewer to add more.".into());
   }
   Ok(())
+}
+
+fn release_quota(len: u64) {
+  use std::sync::atomic::Ordering::SeqCst;
+  INSERTED_FILES.fetch_sub(1, SeqCst);
+  INSERTED_BYTES.fetch_sub(len, SeqCst);
 }
 
 fn insert(
@@ -380,7 +394,6 @@ fn insert(
 ) -> Result<InsertedImage, String> {
   let document = authorized.require(Path::new(document_path), false)?;
   let setting = settings.0.lock().unwrap().image_folder.clone();
-  take_quota(bytes.len() as u64)?;
   let stored = store_image(&document, &setting, name_hint, bytes)?;
   Ok(InsertedImage { markdown: markdown_for(&document, &stored).ok_or("Couldn't link the image")? })
 }

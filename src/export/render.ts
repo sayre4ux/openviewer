@@ -83,7 +83,12 @@ async function embed(img: HTMLImageElement, options: ExportOptions, cache: Map<s
   const src = img.getAttribute("src") ?? "";
   img.removeAttribute("srcset");
   let url: string | null = null;
-  if (/^data:image\//i.test(src)) url = src;
+  if (/^data:image\//i.test(src)) {
+    if (src.length <= budget.left) {
+      budget.left -= src.length;
+      url = src;
+    }
+  }
   else if (/^https?:\/\//i.test(src)) url = options.remoteAllowed(src) ? src : null;
   else if (isLocal(src) && src) {
     const local = src.replace(/^file:\/\//i, "");

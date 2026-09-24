@@ -45,9 +45,18 @@ thread_local! {
   static JOBS: RefCell<HashMap<u64, Job>> = RefCell::default();
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-static COMPLETED: Mutex<Vec<(u64, Result<(), String>)>> = Mutex::new(Vec::new());
-// Jobs given up on mid-print; their late callback is dropped instead of queued.
-static ABANDONED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+// Results from the print thread, and jobs given up on mid-print (with their output file). One lock
+// for both, so a late callback either lands in `completed` before `abandon` clears it or sees itself
+// in `abandoned`.
+struct Queues {
+  completed: Vec<(u64, Result<(), String>)>,
+  abandoned: Vec<(u64, PathBuf)>,
+}
+static QUEUES: Mutex<Queues> = Mutex::new(Queues { completed: Vec::new(), abandoned: Vec::new() });
+
+fn queues() -> std::sync::MutexGuard<'static, Queues> {
+  QUEUES.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 // The error for a print that didn't finish; its output folder must outlive the print operation.
 pub const TIMED_OUT: &str = "The PDF export timed out.";
@@ -69,13 +78,17 @@ define_class!(
       // WebKit calls this on its printing thread; the next tick on the main thread picks it up.
       let result = if success.as_bool() { Ok(()) } else { Err("The PDF couldn't be created.".into()) };
       let id = self.ivars().id;
-      let mut abandoned = ABANDONED.lock().unwrap_or_else(|e| e.into_inner());
-      if let Some(i) = abandoned.iter().position(|a| *a == id) {
-        abandoned.remove(i);
+      let mut queues = queues();
+      if let Some(i) = queues.abandoned.iter().position(|(a, _)| *a == id) {
+        // Nobody is waiting any more; the print has ended, so its private folder can go.
+        let (_, out) = queues.abandoned.remove(i);
+        drop(queues);
+        if let Some(dir) = out.parent().filter(|d| d.file_name().is_some_and(|n| n.to_string_lossy().starts_with("openviewer-export-"))) {
+          let _ = std::fs::remove_dir_all(dir);
+        }
         return;
       }
-      drop(abandoned);
-      COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).push((id, result));
+      queues.completed.push((id, result));
     }
   }
 
@@ -142,8 +155,8 @@ fn begin(id: u64, html: &str, out: PathBuf, done: Done, alive: Arc<AtomicBool>) 
 fn tick(id: u64) {
   if MainThreadMarker::new().is_none() { return }
   let completed = {
-    let mut completed = COMPLETED.lock().unwrap_or_else(|e| e.into_inner());
-    completed.iter().position(|(done, _)| *done == id).map(|i| completed.remove(i).1)
+    let mut queues = queues();
+    queues.completed.iter().position(|(done, _)| *done == id).map(|i| queues.completed.remove(i).1)
   };
   if let Some(result) = completed { return finish(id, result) }
   // What to do is decided under the borrow; printing happens outside it, because AppKit may call the
@@ -213,9 +226,12 @@ fn finish(id: u64, result: Result<(), String>) {
 fn abandon(id: u64) {
   let Some(job) = JOBS.with_borrow_mut(|jobs| jobs.remove(&id)) else { return };
   job.alive.store(false, Ordering::SeqCst);
-  ABANDONED.lock().unwrap_or_else(|e| e.into_inner()).push(id);
-  // A callback that arrived since the last tick is already queued; drop it too.
-  COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(done, _)| *done != id);
+  {
+    let mut queues = queues();
+    // A callback that arrived since the last tick is already queued; drop it (the print is over).
+    queues.completed.retain(|(done, _)| *done != id);
+    queues.abandoned.push((id, job.out.clone()));
+  }
   let _ = job.done.send(Err(TIMED_OUT.into()));
   std::mem::forget(job);
 }

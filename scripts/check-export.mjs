@@ -37,6 +37,8 @@ const hostile = [
   '<math><mglyph src="http://127.0.0.1/m.png"/></math>',
   // One local image used many times: each use is charged, not just the first.
   ...Array.from({ length: 8 }, () => "![big](assets/big.png)"),
+  // Inline data: images count against the same budget (it is already used up here).
+  `![inline](data:image/png;base64,${"B".repeat(40)})`,
 ].join("\n\n");
 const html = await page.evaluate((md) => window.__ov.renderExport(md), hostile);
 const doc = await page.evaluate((h) => {
@@ -64,7 +66,7 @@ check("no scripts or handlers survive", doc.scripts === 0 && !doc.handlers, JSON
 check("javascript: links removed", doc.jsLinks === 0);
 check("iframes, raw styles, and forms removed", doc.iframes === 0 && doc.styles === 0 && doc.forms === 0, JSON.stringify(doc));
 check("image policy: web kept, LAN and loopback dropped, local without Rust dropped",
-  JSON.stringify(doc.imgs.filter((s) => !s.startsWith("data:"))) === JSON.stringify(["https://example.com/a.png", "https://example.com/b.png"]) && doc.missing.join(",") === "image,lan,loop,local,big,big,big,big,big",
+  JSON.stringify(doc.imgs.filter((s) => !s.startsWith("data:"))) === JSON.stringify(["https://example.com/a.png", "https://example.com/b.png"]) && doc.missing.join(",") === "image,lan,loop,local,big,big,big,big,big,inline",
   JSON.stringify({ imgs: doc.imgs, missing: doc.missing }));
 check("nothing else in the page can load a resource",
   doc.loads.every((l) => /^img\[src\]=(https:\/\/example\.com\/|data:image\/png)/.test(l) || l.startsWith("span[style]=color")) && doc.keptStyle,
