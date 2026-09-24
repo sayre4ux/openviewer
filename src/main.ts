@@ -258,7 +258,10 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   renderExport: async (markdown: string, withFonts = false) => {
     const { renderExport, loadFonts } = await import("./export/render");
     return renderExport(markdown, {
-      name: "Test", remoteAllowed: imageUrlAllowed, embedImage: async () => null,
+      name: "Test", remoteAllowed: imageUrlAllowed,
+      // "assets/big.png" stands in for a local image Rust would embed; the budget fits three copies.
+      embedImage: async (src) => (src === "assets/big.png" ? `data:image/png;base64,${"A".repeat(40)}` : null),
+      embedBudget: 3 * 62,
       fonts: withFonts ? await loadFonts() : undefined,
     });
   },

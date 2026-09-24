@@ -259,7 +259,7 @@ pub async fn allow_image_folder<R: Runtime>(app: tauri::AppHandle<R>, document_p
 // Image files the user dropped, with the window they were dropped on; each usable once, by that
 // window, through `insert_dropped_image`.
 #[derive(Default)]
-pub struct DroppedImages(pub Mutex<HashMap<PathBuf, String>>);
+pub struct DroppedImages(pub Mutex<HashSet<(PathBuf, String)>>);
 
 pub fn droppable_images(paths: &[PathBuf]) -> Vec<PathBuf> {
   paths.iter().filter_map(|p| fs::canonicalize(p).ok()).filter(|p| is_image_file(p)).collect()
@@ -354,6 +354,23 @@ fn markdown_for(document: &Path, image: &Path) -> Option<String> {
   Some(format!("![{alt}]({})", encoded.join("/")))
 }
 
+// DECISION: images added per session are capped (2 GB, 5,000 files), so a compromised window can't
+// fill the disk through insert_image. Far above what anyone pastes by hand.
+const SESSION_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const SESSION_FILES: u64 = 5000;
+static INSERTED_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static INSERTED_FILES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn take_quota(len: u64) -> Result<(), String> {
+  use std::sync::atomic::Ordering::SeqCst;
+  let files = INSERTED_FILES.fetch_add(1, SeqCst);
+  let bytes = INSERTED_BYTES.fetch_add(len, SeqCst);
+  if files >= SESSION_FILES || bytes + len > SESSION_BYTES {
+    return Err("Too many images were added in this session. Restart OpenViewer to add more.".into());
+  }
+  Ok(())
+}
+
 fn insert(
   authorized: &AuthorizedDocuments,
   settings: &crate::settings::SettingsState,
@@ -363,6 +380,7 @@ fn insert(
 ) -> Result<InsertedImage, String> {
   let document = authorized.require(Path::new(document_path), false)?;
   let setting = settings.0.lock().unwrap().image_folder.clone();
+  take_quota(bytes.len() as u64)?;
   let stored = store_image(&document, &setting, name_hint, bytes)?;
   Ok(InsertedImage { markdown: markdown_for(&document, &stored).ok_or("Couldn't link the image")? })
 }
@@ -412,10 +430,8 @@ pub async fn insert_dropped_image(
   dropped: tauri::State<'_, DroppedImages>,
 ) -> Result<InsertedImage, String> {
   let source = fs::canonicalize(&source).map_err(|e| e.to_string())?;
-  {
-    let mut dropped = dropped.0.lock().unwrap();
-    if dropped.get(&source).map(String::as_str) != Some(window.label()) { return Err("That image wasn't dropped on this window.".into()); }
-    dropped.remove(&source);
+  if !dropped.0.lock().unwrap().remove(&(source.clone(), window.label().to_string())) {
+    return Err("That image wasn't dropped on this window.".into());
   }
   let file = platform::open_for_read(&source)?;
   let mut bytes = Vec::new();

@@ -89,7 +89,8 @@ pub async fn render_pdf<R: Runtime>(app: &tauri::AppHandle<R>, html: String) -> 
     if bytes.len() > EXPORT_LIMIT { return Err("The PDF is too large.".into()); }
     if bytes.starts_with(b"%PDF") { Ok(bytes) } else { Err("The PDF couldn't be created.".into()) }
   });
-  let _ = fs::remove_dir_all(&dir);
+  // DECISION: a timed-out print may still be writing there, so its (private) folder is left behind.
+  if !matches!(&result, Err(e) if e == platform::TIMED_OUT) { let _ = fs::remove_dir_all(&dir); }
   result
 }
 

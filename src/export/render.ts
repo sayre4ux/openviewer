@@ -18,6 +18,8 @@ export type ExportOptions = {
   remoteAllowed: (source: string) => boolean;
   // PT Serif as data: URLs, so the page looks right anywhere. Omitted in tests.
   fonts?: { regular: string; italic: string; bold: string; boldItalic: string };
+  // Total size of embedded image data; EMBED_BUDGET unless a test sets a smaller one.
+  embedBudget?: number;
 };
 
 const marked = new Marked({ gfm: true, breaks: false, async: false });
@@ -67,14 +69,17 @@ function isLocal(src: string) {
 // DECISION: dropped rather than checked; a Markdown export has no use for video, SVG references, or
 // CSS images, and each would be another way to reach the network.
 const FORBID_TAGS = ["style", "form", "button", "textarea", "select", "video", "audio", "source", "track",
-  "picture", "object", "embed", "image", "feImage", "use", "link", "meta", "base"];
+  "picture", "object", "embed", "image", "feImage", "use", "link", "meta", "base", "mglyph", "maction"];
 const FORBID_ATTR = ["srcset", "poster", "background", "lowsrc", "dynsrc", "ping", "action", "formaction", "xlink:href", "cite", "longdesc"];
-const cssLoads = /url\s*\(|image-set\s*\(|@import|expression\s*\(|\\/i;
+// A value that could name a resource in CSS or SVG: url(), image(), image-set(), cross-fade(),
+// element(), @import, or any backslash escape that could spell one of those.
+const loads = /url\s*\(|image\s*\(|image-set|cross-fade|element\s*\(|@import|expression\s*\(|\\/i;
 
 // Budget for embedded image bytes, so a document that repeats a large image can't exhaust memory.
 const EMBED_BUDGET = 200 * 1024 * 1024;
 
 async function embed(img: HTMLImageElement, options: ExportOptions, cache: Map<string, string | null>, budget: { left: number }) {
+  // Charged per use, not per file: every <img> carries its own copy of the data URL.
   const src = img.getAttribute("src") ?? "";
   img.removeAttribute("srcset");
   let url: string | null = null;
@@ -82,12 +87,12 @@ async function embed(img: HTMLImageElement, options: ExportOptions, cache: Map<s
   else if (/^https?:\/\//i.test(src)) url = options.remoteAllowed(src) ? src : null;
   else if (isLocal(src) && src) {
     const local = src.replace(/^file:\/\//i, "");
-    if (!cache.has(local)) {
-      const data = budget.left > 0 ? await options.embedImage(local) : null;
-      budget.left -= data?.length ?? 0;
-      cache.set(local, data && budget.left >= 0 ? data : null);
+    if (!cache.has(local)) cache.set(local, budget.left > 0 ? await options.embedImage(local) : null);
+    const data = cache.get(local) ?? null;
+    if (data && data.length <= budget.left) {
+      budget.left -= data.length;
+      url = data;
     }
-    url = cache.get(local) ?? null;
   }
   if (url) {
     img.setAttribute("src", url);
@@ -116,8 +121,12 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
   const html = marked.parse(markdown) as string;
   const purify = DOMPurify();
   // Inline styles stay (colors, alignment) unless they could load something.
-  purify.addHook("uponSanitizeAttribute", (_node, data) => {
-    if (data.attrName === "style" && cssLoads.test(data.attrValue)) data.keepAttr = false;
+  // Only <img src> and <a href> may hold a URL; any other attribute that could load one goes.
+  purify.addHook("uponSanitizeAttribute", (node, data) => {
+    const tag = node.nodeName.toLowerCase();
+    if (data.attrName === "src" && tag !== "img") data.keepAttr = false;
+    else if (data.attrName === "href" && tag !== "a") data.keepAttr = false;
+    else if (data.attrName !== "src" && data.attrName !== "href" && loads.test(data.attrValue)) data.keepAttr = false;
   });
   const body = purify.sanitize(html, { RETURN_DOM_FRAGMENT: true, FORBID_TAGS, FORBID_ATTR });
   // Only disabled task-list checkboxes survive as inputs.
@@ -128,7 +137,7 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
   await Promise.all(Array.from(body.querySelectorAll<HTMLElement>("pre > code")).map(highlight));
   // One image at a time, each source once, within the budget.
   const cache = new Map<string, string | null>();
-  const budget = { left: EMBED_BUDGET };
+  const budget = { left: options.embedBudget ?? EMBED_BUDGET };
   for (const img of Array.from(body.querySelectorAll("img"))) await embed(img, options, cache, budget);
   const title = body.querySelector("h1")?.textContent?.trim() || options.name || "Untitled";
   const holder = document.createElement("div");

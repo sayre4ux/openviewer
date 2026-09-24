@@ -17,8 +17,10 @@ pub use portable::{create_file, open_for_read, replace_file};
 #[cfg(target_os = "macos")]
 mod macos_pdf;
 #[cfg(target_os = "macos")]
-pub use macos_pdf::print_to_pdf;
+pub use macos_pdf::{print_to_pdf, TIMED_OUT};
 
+#[cfg(not(target_os = "macos"))]
+pub const TIMED_OUT: &str = "The PDF export timed out.";
 #[cfg(not(target_os = "macos"))]
 pub async fn print_to_pdf<R: tauri::Runtime>(_app: &tauri::AppHandle<R>, _html: String, _out: std::path::PathBuf) -> Result<(), String> {
   Err("PDF export isn't available on this system yet. Export as HTML and print it from a browser.".into())

@@ -32,6 +32,11 @@ const hostile = [
   '<table background="http://127.0.0.1/a.png"><tr><td>t</td></tr></table>',
   '<svg><image href="http://127.0.0.1/a.png"/><use href="http://127.0.0.1/s.svg#x"/></svg>',
   '<img src="https://example.com/b.png" srcset="http://127.0.0.1/a.png 2x">',
+  '<p style="background:image(\'http://127.0.0.1/a.png\')">i</p> <p style="background:CROSS-FADE(image(x), white)">c</p>',
+  '<svg><rect fill="url(http://127.0.0.1/p.svg#g)" filter="url(http://127.0.0.1/f.svg#f)"/><linearGradient href="http://127.0.0.1/g.svg#g"/><textPath href="http://127.0.0.1/t.svg#p">t</textPath></svg>',
+  '<math><mglyph src="http://127.0.0.1/m.png"/></math>',
+  // One local image used many times: each use is charged, not just the first.
+  ...Array.from({ length: 8 }, () => "![big](assets/big.png)"),
 ].join("\n\n");
 const html = await page.evaluate((md) => window.__ov.renderExport(md), hostile);
 const doc = await page.evaluate((h) => {
@@ -49,20 +54,22 @@ const doc = await page.evaluate((h) => {
     title: d.title,
     // Every URL the page could load, from any attribute or inline style.
     loads: Array.from(d.body.querySelectorAll("*")).flatMap((el) => Array.from(el.attributes)
-      .filter((a) => /^(src|srcset|poster|background|href|xlink:href|style|data)$/i.test(a.name) && !(el.tagName === "A" && a.name === "href"))
+      .filter((a) => (/^(src|srcset|poster|background|href|xlink:href|style|data)$/i.test(a.name) || /url\s*\(|image\s*\(/i.test(a.value)) && !(el.tagName === "A" && a.name === "href"))
       .map((a) => `${el.tagName.toLowerCase()}[${a.name}]=${a.value}`)),
     keptStyle: d.querySelector('span[style*="color"]') !== null,
+    bigEmbedded: Array.from(d.querySelectorAll("img")).filter((i) => i.getAttribute("src")?.startsWith("data:")).length,
   };
 }, html);
 check("no scripts or handlers survive", doc.scripts === 0 && !doc.handlers, JSON.stringify({ s: doc.scripts, h: doc.handlers }));
 check("javascript: links removed", doc.jsLinks === 0);
 check("iframes, raw styles, and forms removed", doc.iframes === 0 && doc.styles === 0 && doc.forms === 0, JSON.stringify(doc));
 check("image policy: web kept, LAN and loopback dropped, local without Rust dropped",
-  JSON.stringify(doc.imgs) === JSON.stringify(["https://example.com/a.png", "https://example.com/b.png"]) && doc.missing.join(",") === "image,lan,loop,local",
+  JSON.stringify(doc.imgs.filter((s) => !s.startsWith("data:"))) === JSON.stringify(["https://example.com/a.png", "https://example.com/b.png"]) && doc.missing.join(",") === "image,lan,loop,local,big,big,big,big,big",
   JSON.stringify({ imgs: doc.imgs, missing: doc.missing }));
 check("nothing else in the page can load a resource",
-  doc.loads.every((l) => /^img\[src\]=https:\/\/example\.com\//.test(l) || l.startsWith("span[style]=color")) && doc.keptStyle,
+  doc.loads.every((l) => /^img\[src\]=(https:\/\/example\.com\/|data:image\/png)/.test(l) || l.startsWith("span[style]=color")) && doc.keptStyle,
   JSON.stringify(doc.loads));
+check("the embed budget counts every use of an image", doc.bigEmbedded === 3, String(doc.bigEmbedded));
 check("page CSP forbids scripts", doc.csp.startsWith("default-src 'none'") && !doc.csp.includes("script"), doc.csp);
 check("title from the first heading", doc.title === "Hostile", doc.title);
 

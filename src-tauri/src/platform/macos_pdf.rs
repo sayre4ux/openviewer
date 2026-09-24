@@ -46,6 +46,11 @@ thread_local! {
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static COMPLETED: Mutex<Vec<(u64, Result<(), String>)>> = Mutex::new(Vec::new());
+// Jobs given up on mid-print; their late callback is dropped instead of queued.
+static ABANDONED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+// The error for a print that didn't finish; its output folder must outlive the print operation.
+pub const TIMED_OUT: &str = "The PDF export timed out.";
 
 pub struct DelegateIvars {
   id: u64,
@@ -63,7 +68,14 @@ define_class!(
     fn did_run(&self, _operation: &NSPrintOperation, success: Bool, _context: *mut c_void) {
       // WebKit calls this on its printing thread; the next tick on the main thread picks it up.
       let result = if success.as_bool() { Ok(()) } else { Err("The PDF couldn't be created.".into()) };
-      COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).push((self.ivars().id, result));
+      let id = self.ivars().id;
+      let mut abandoned = ABANDONED.lock().unwrap_or_else(|e| e.into_inner());
+      if let Some(i) = abandoned.iter().position(|a| *a == id) {
+        abandoned.remove(i);
+        return;
+      }
+      drop(abandoned);
+      COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).push((id, result));
     }
   }
 
@@ -101,7 +113,7 @@ pub async fn print_to_pdf<R: Runtime>(app: &AppHandle<R>, html: String, out: Pat
   tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(LOAD_TIMEOUT + PRINT_TIMEOUT + Duration::from_secs(10)))
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|_| "The PDF export timed out.".to_string())?
+    .map_err(|_| TIMED_OUT.to_string())?
 }
 
 fn begin(id: u64, html: &str, out: PathBuf, done: Done, alive: Arc<AtomicBool>) -> Result<(), String> {
@@ -149,7 +161,7 @@ fn tick(id: u64) {
   });
   match ready {
     None => {}
-    Some(Err(())) => finish(id, Err("The PDF export timed out.".into())),
+    Some(Err(())) => abandon(id),
     Some(Ok((webview, window, out))) => {
       let delegate = PrintDelegate::new(id);
       JOBS.with_borrow_mut(|jobs| {
@@ -188,15 +200,22 @@ fn print(webview: &WKWebView, window: &NSWindow, out: &std::path::Path, delegate
   }
 }
 
+// The print operation is over (or never started): the view, window, and delegate can go.
 fn finish(id: u64, result: Result<(), String>) {
   let Some(job) = JOBS.with_borrow_mut(|jobs| jobs.remove(&id)) else { return };
   job.alive.store(false, Ordering::SeqCst);
   let _ = job.done.send(result);
-  if job.printing.is_some() && COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|(done, _)| *done != id) {
-    // Timed out mid-print: AppKit may still call the delegate and draw the view, so they are kept
-    // alive (leaked) rather than freed under it. This only happens on a stuck print.
-    std::mem::forget(job);
-    return;
-  }
   job.window.close();
+}
+
+// A print that didn't finish in time. AppKit may still call the delegate and draw the view, so they
+// are kept alive (leaked) rather than freed under it; this only happens on a stuck print.
+fn abandon(id: u64) {
+  let Some(job) = JOBS.with_borrow_mut(|jobs| jobs.remove(&id)) else { return };
+  job.alive.store(false, Ordering::SeqCst);
+  ABANDONED.lock().unwrap_or_else(|e| e.into_inner()).push(id);
+  // A callback that arrived since the last tick is already queued; drop it too.
+  COMPLETED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(done, _)| *done != id);
+  let _ = job.done.send(Err(TIMED_OUT.into()));
+  std::mem::forget(job);
 }
