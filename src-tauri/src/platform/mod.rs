@@ -13,6 +13,17 @@ mod portable;
 #[cfg(not(target_os = "macos"))]
 pub use portable::{create_file, open_for_read, replace_file};
 
+// Printing an exported page to PDF. Windows can do this later with WebView2's PrintToPdf.
+#[cfg(target_os = "macos")]
+mod macos_pdf;
+#[cfg(target_os = "macos")]
+pub use macos_pdf::print_to_pdf;
+
+#[cfg(not(target_os = "macos"))]
+pub async fn print_to_pdf<R: tauri::Runtime>(_app: &tauri::AppHandle<R>, _html: String, _out: std::path::PathBuf) -> Result<(), String> {
+  Err("PDF export isn't available on this system yet. Export as HTML and print it from a browser.".into())
+}
+
 use std::path::Path;
 
 // `create_file` errors start with this when the name is already taken.

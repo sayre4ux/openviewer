@@ -1,7 +1,7 @@
 // App settings other than shortcuts, in `settings.json` next to `keybindings.json`. Unknown or invalid
 // values fall back to the defaults, so a hand edit can't break the app.
 
-use std::{fs, io::Read, path::PathBuf, sync::Mutex};
+use std::{fs, io::Read, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{documents::write_regular_file, platform};
@@ -43,7 +43,7 @@ fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
   Ok(app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json"))
 }
 
-fn read(path: &PathBuf) -> Settings {
+fn read(path: &Path) -> Settings {
   let Ok(file) = platform::open_for_read(path) else { return Settings::default() };
   let mut buf = Vec::new();
   if file.take(SETTINGS_LIMIT + 1).read_to_end(&mut buf).is_err() || buf.len() as u64 > SETTINGS_LIMIT {

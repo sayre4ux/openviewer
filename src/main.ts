@@ -254,6 +254,14 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   imageUrlAllowed,
   localImageCandidate,
   pastedImageName,
+  // Renders an export page; local images come back as their alt text (there's no Rust here).
+  renderExport: async (markdown: string, withFonts = false) => {
+    const { renderExport, loadFonts } = await import("./export/render");
+    return renderExport(markdown, {
+      name: "Test", remoteAllowed: imageUrlAllowed, embedImage: async () => null,
+      fonts: withFonts ? await loadFonts() : undefined,
+    });
+  },
   snapshot: () => doc.snapshot(),
   saved: (next: Text) => doc.saved(next),
   isDirty: () => doc.isDirty(),

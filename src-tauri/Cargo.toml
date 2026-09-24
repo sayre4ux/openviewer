@@ -28,11 +28,10 @@ getrandom = "0.3"
 # macOS-only: WebKit/AppKit printing for PDF export, and race-safe file I/O (F_GETPATH, openat,
 # copyfile). Windows support would add its own section; see src/platform/.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-app-kit"] }
-block2 = "0.6"
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKWebpagePreferences", "WKNavigation", "objc2-app-kit"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
-objc2-app-kit = { version = "0.3", features = ["NSPrintOperation", "NSPrintInfo", "NSView", "NSResponder", "NSGraphics"] }
+objc2-app-kit = { version = "0.3", features = ["NSPrintOperation", "NSPrintInfo", "NSView", "NSResponder", "NSGraphics", "NSWindow"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

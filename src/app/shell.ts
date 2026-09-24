@@ -1,5 +1,5 @@
 import type { Text } from "@codemirror/state";
-import { setImageResolver } from "../editor/livePreview";
+import { imageUrlAllowed, setImageResolver } from "../editor/livePreview";
 import { lineEndings } from "./document";
 import { pastedImageName } from "./imageNames";
 
@@ -267,6 +267,41 @@ export async function startShell(
     });
   });
 
+  // File → Export: the page is rendered here (sanitized, images embedded by Rust's rules) and Rust
+  // writes it, as HTML or printed to PDF, to the file picked in its dialog.
+  let exporting = false;
+  const exportAs = async (format: "pdf" | "html") => {
+    if (exporting) return;
+    exporting = true;
+    try {
+      const name = path?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, "") || "Untitled";
+      const target = await call<string | null>("export_dialog", { format, defaultPath: path ?? `${name}.md` });
+      if (!target) return;
+      const { renderExport, loadFonts, imageDataUrl } = await import("../export/render");
+      const documentPath = path;
+      const html = await renderExport(doc.getText(), {
+        name,
+        remoteAllowed: imageUrlAllowed,
+        fonts: await loadFonts(),
+        embedImage: async (src) => {
+          const candidate = documentPath && localImageCandidate(src, documentPath);
+          if (!candidate) return null;
+          try {
+            const bytes = await call<ArrayBuffer>("export_image", { documentPath, source: candidate });
+            return imageDataUrl(candidate, new Uint8Array(bytes));
+          } catch {
+            return null;
+          }
+        },
+      });
+      await call(format === "pdf" ? "export_pdf" : "export_html", { path: target, html });
+    } catch (error) {
+      await message(String(error), { title: "Couldn’t export", kind: "error" });
+    } finally {
+      exporting = false;
+    }
+  };
+
   const startupPath = new URLSearchParams(location.search).get("path");
   if (startupPath) await openIntoCurrent(startupPath);
   const { listen, emit } = await import("@tauri-apps/api/event");
@@ -278,6 +313,8 @@ export async function startShell(
       case "save": await save(); break;
       case "save-as": await saveAs(); break;
       case "close-window": await win.close(); break;
+      case "export-pdf": await exportAs("pdf"); break;
+      case "export-html": await exportAs("html"); break;
       case "save-as-utf8":
         if (path) await saveTo(path, UTF8);
         else await saveAs();

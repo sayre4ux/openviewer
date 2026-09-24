@@ -4,6 +4,8 @@
   { "id": "save", "label": "Save", "menu": "File", "key": "Cmd+S", "separatorBefore": true },
   { "id": "save-as", "label": "Save As…", "menu": "File", "key": "Cmd+Shift+S" },
   { "id": "save-as-utf8", "label": "Save as UTF-8", "menu": "File", "key": "" },
+  { "id": "export-pdf", "label": "Export as PDF…", "menu": "File", "key": "Cmd+Shift+E", "separatorBefore": true },
+  { "id": "export-html", "label": "Export as HTML…", "menu": "File", "key": "" },
   { "id": "close-window", "label": "Close Window", "menu": "File", "key": "Cmd+W", "separatorBefore": true },
 
   { "id": "undo", "label": "Undo", "menu": "Edit", "key": "Cmd+Z" },

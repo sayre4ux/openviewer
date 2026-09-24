@@ -76,6 +76,12 @@ cd src-tauri && cargo test
    - Text files are decoded in Rust (`documents::decode`); NUL bytes without a BOM mean binary and
      are refused. A save that the file's encoding can't hold fails with `unmappable:` rather than
      writing replacement characters.
+   - Export (`export.rs`, `src/export/`): Markdown is rendered with marked, sanitized with DOMPurify,
+     and only then changed by us (highlighting, embedded images). The page has its own CSP with no
+     scripts. Rust writes only to a target picked in `export_dialog`, once. PDFs are printed by an
+     offscreen WKWebView outside the app (JavaScript off, non-persistent store, no IPC) into a private
+     temporary folder, then saved like a document. `OPENVIEWER_PDF_SELFTEST=in.html:out.pdf` (debug
+     builds only) prints a page and quits.
    - Platform code lives in `src-tauri/src/platform/`: descriptor-based on macOS, a portable
      fallback elsewhere that opens without following links and checks the opened handle.
    - Images from loopback, private, and link-local hosts are blocked (`imageUrlAllowed`).

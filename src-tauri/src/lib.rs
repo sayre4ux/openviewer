@@ -8,6 +8,7 @@ use std::{
 use tauri::{webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
 
 mod documents;
+mod export;
 mod images;
 mod menu;
 mod platform;
@@ -114,6 +115,7 @@ pub fn run() {
     .manage(images::ImageGrants::default())
     .manage(images::DroppedImages::default())
     .manage(settings::SettingsState::default())
+    .manage(export::ExportTargets::default())
     // Local images are served from our own scheme, never from a directory scope. The file is read on
     // a worker thread: WebKit calls scheme handlers on the main thread.
     .register_asynchronous_uri_scheme_protocol(images::SCHEME, |ctx, request, responder| {
@@ -136,6 +138,20 @@ pub fn run() {
         let path = std::path::PathBuf::from(arg);
         if path.is_file() { open_requested(app.handle(), &path); }
       }
+      // Development only: OPENVIEWER_PDF_SELFTEST="page.html:out.pdf" prints a page to PDF and quits,
+      // so the native print path can be checked without clicking through the app.
+      #[cfg(debug_assertions)]
+      if let Some((input, output)) = std::env::var("OPENVIEWER_PDF_SELFTEST").ok().and_then(|v| v.split_once(':').map(|(a, b)| (a.to_owned(), b.to_owned()))) {
+        let app = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+          let result = match std::fs::read_to_string(&input) {
+            Ok(html) => export::render_pdf(&app, html).await.and_then(|pdf| std::fs::write(&output, pdf).map_err(|e| e.to_string())),
+            Err(e) => Err(e.to_string()),
+          };
+          eprintln!("pdf selftest: {result:?}");
+          app.exit(if result.is_ok() { 0 } else { 1 });
+        });
+      }
       Ok(())
     })
     .on_menu_event(|app, event| {
@@ -147,7 +163,7 @@ pub fn run() {
       let Some(focused) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false)) else { return };
       // File commands chosen while Preferences is in front go to the last document window;
       // Preferences handles everything else itself (Close, Quit, Undo in its search field).
-      let for_document = matches!(id, "new" | "open" | "save" | "save-as" | "save-as-utf8");
+      let for_document = matches!(id, "new" | "open" | "save" | "save-as" | "save-as-utf8" | "export-pdf" | "export-html");
       let target = if focused.label() == "preferences" && for_document {
         app.state::<LastDocument>().0.lock().unwrap().clone().filter(|label| app.get_webview_window(label).is_some())
       } else {
@@ -200,6 +216,10 @@ pub fn run() {
       images::insert_dropped_image,
       settings::get_settings,
       settings::set_settings,
+      export::export_dialog,
+      export::export_html,
+      export::export_pdf,
+      export::export_image,
       create_document_window,
       frontend_ready,
       sync_view_menu,

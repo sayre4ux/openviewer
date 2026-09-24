@@ -28,6 +28,10 @@
     "allow-get-keybindings",
     "allow-insert-image",
     "allow-insert-dropped-image",
-    "allow-get-settings"
+    "allow-get-settings",
+    "allow-export-dialog",
+    "allow-export-html",
+    "allow-export-pdf",
+    "allow-export-image"
   ]
 }

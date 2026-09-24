@@ -17,6 +17,8 @@ and read in one view, and Markdown syntax disappears once you finish typing it.
   linked with a relative path (Preferences → Images offers a folder per document instead).
 - **Any text encoding.** UTF-8, UTF-16, and legacy encodings such as Big5, GBK, or Shift_JIS open
   and save in their own encoding; the status bar names any encoding that isn't UTF-8.
+- **Export** to PDF (⇧⌘E) or a single self-contained HTML file, in the same Newsprint look, with
+  local images and fonts embedded.
 - **Code blocks** in a dark card with syntax highlighting and a language picker.
 - **Outline sidebar** (⇧⌘L), **focus mode** (F8), **typewriter mode** (F9), and a word count that
   counts Chinese, Japanese, and Korean characters as words.

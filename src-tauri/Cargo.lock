@@ -2521,7 +2521,6 @@ dependencies = [
 name = "openviewer"
 version = "0.1.0"
 dependencies = [
- "block2",
  "chardetng",
  "encoding_rs",
  "getrandom 0.3.4",

@@ -1,0 +1,147 @@
+/* Exported pages (HTML and PDF), in the Newsprint look of the editor. Printing uses white paper; code
+   blocks keep their dark card. */
+
+:root {
+  --paper: #f3f2ee;
+  --ink: #1f0909;
+  --muted: #656565;
+  --rule: #c5c5c5;
+  --quote-bar: #bababa;
+  --code-bg: #dadada;
+  --link: #065588;
+  --card-bg: #141414;
+  --card-edge: #2c2c2c;
+  --card-ink: #e6e6e6;
+  --serif: "PT Serif", "Times New Roman", Times, serif;
+  --mono: Menlo, "SF Mono", Consolas, "Courier New", monospace;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  line-height: 1.5;
+}
+.ov-export {
+  box-sizing: border-box;
+  max-width: calc(40em + 60px);
+  margin: 0 auto;
+  padding: 60px 30px 80px;
+  overflow-wrap: break-word;
+}
+
+.ov-export > :first-child { margin-top: 0; padding-top: 0; }
+p, ul, ol, blockquote, table, pre, figure { margin: 0 0 1.5rem; }
+
+h1, h2, h3, h4, h5, h6 { margin: 0; break-after: avoid; }
+h1 {
+  font-size: 1.875em;
+  line-height: 1.3em;
+  font-weight: 400;
+  padding: 0.7em 0 0.8125em;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+h2, h3 { font-size: 1.3125em; line-height: 1.15; padding: 1.2em 0 0.2em; margin-bottom: 0.6em; }
+h2 { font-weight: 700; }
+h3 { font-weight: 400; }
+h4 { font-size: 1.125em; padding-top: 1.3em; margin-bottom: 0.5em; }
+h5, h6 { font-size: 1em; padding-top: 1em; margin-bottom: 0.5em; }
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+strong { font-weight: 700; }
+del { text-decoration: line-through; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  background: var(--code-bg);
+  padding: 0 2px;
+}
+
+img { max-width: 100%; break-inside: avoid; }
+.ov-missing-image {
+  padding: 0 0.4em;
+  font-size: 0.8em;
+  color: var(--muted);
+  background: var(--code-bg);
+}
+
+blockquote {
+  margin-left: 2em;
+  padding-left: 1em;
+  border-left: 5px solid var(--quote-bar);
+  color: var(--muted);
+  font-style: italic;
+}
+blockquote > :last-child { margin-bottom: 0; }
+
+ul, ol { padding-left: calc(1.5em + 30px); }
+li { padding-top: 0.25em; }
+li > p { margin: 0; }
+li > ul, li > ol { margin: 0; }
+li:has(> input[type="checkbox"]) { list-style: none; }
+li > input[type="checkbox"] { margin: 0 0.5em 0 -1.4em; vertical-align: middle; accent-color: var(--ink); }
+
+hr {
+  height: 0;
+  margin: 1.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+th, td {
+  padding: 0.25em 0.25em 0.25em 0.4em;
+  text-align: left;
+  vertical-align: top;
+}
+thead { background: var(--code-bg); }
+th { font-weight: 700; text-transform: uppercase; }
+tbody tr:nth-child(even) { background: #e8e7e7; }
+tr { break-inside: avoid; }
+
+/* Code: the dark card from the editor. */
+pre {
+  padding: 14px 18px;
+  overflow-x: auto;
+  border: 1px solid var(--card-edge);
+  border-radius: 12px;
+  background: var(--card-bg);
+  color: var(--card-ink);
+  font-size: 0.875em;
+  line-height: 1.714285em;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+  break-inside: avoid; /* a card longer than a page still breaks */
+}
+pre code {
+  padding: 0;
+  background: none;
+  font-size: 1em;
+  white-space: pre-wrap;
+}
+pre .k, pre .a { color: #b392f0; }
+pre .s { color: #a5d6a7; }
+pre .n { color: #f2b880; }
+pre .g, pre .f { color: #8fb8f0; }
+pre .c { color: #6f7680; font-style: italic; }
+pre .y { color: #e6c07b; }
+
+@media print {
+  body { background: #fff; }
+  .ov-export { max-width: none; padding: 0; }
+  thead, tbody tr:nth-child(even), code { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: var(--link); }
+}

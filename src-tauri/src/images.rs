@@ -213,6 +213,14 @@ fn resolve(grants: &ImageGrants, document: &Path, source: &Path, home: Option<&P
   Resolution::Blocked { folder }
 }
 
+// The bytes of an image the document may show, for embedding in an export.
+pub fn image_bytes(grants: &ImageGrants, document: &Path, source: &Path) -> Option<Vec<u8>> {
+  match resolve(grants, document, source, home_dir().as_deref()) {
+    Resolution::Ok { url } => grants.serve(url.rsplit('/').next()?).map(|(bytes, _)| bytes),
+    Resolution::Blocked { .. } => None,
+  }
+}
+
 // The folder a user may allow for an image: its own folder, but never the home folder or a disk root.
 fn grantable_folder(image: &Path, home: Option<&Path>) -> Option<PathBuf> {
   let folder = image.parent()?;
