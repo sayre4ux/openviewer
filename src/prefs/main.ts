@@ -1,5 +1,6 @@
 import { createKeybindingStore } from "../shared/keybindings";
 import { commandDefs, display, effectiveKeys, fromEvent, isUsable, type Overrides, reserved } from "../shared/keys";
+import { setupImagesPane } from "./images";
 import "./prefs.css";
 
 // Preferences → Shortcuts. Click a shortcut to record a new one: Esc cancels, ⌫ clears it.
@@ -217,6 +218,21 @@ if (native) {
     });
   });
 }
+
+// Sidebar tabs: one pane shows at a time.
+const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>(".prefs-tab"));
+for (const tab of tabs) {
+  tab.addEventListener("click", () => {
+    for (const t of tabs) {
+      const active = t === tab;
+      t.classList.toggle("is-active", active);
+      if (active) t.setAttribute("aria-current", "page");
+      else t.removeAttribute("aria-current");
+      document.getElementById(`pane-${t.dataset.pane}`)!.hidden = !active;
+    }
+  });
+}
+setupImagesPane();
 
 void store.load().then((loaded) => {
   overrides = loaded.overrides;

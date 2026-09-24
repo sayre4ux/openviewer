@@ -62,9 +62,22 @@ cd src-tauri && cargo test
      (`open_dialog` / `save_dialog`), a drop, or Finder's Open With. Paths are compared canonically,
      reads verify the opened file with `F_GETPATH`, and writes go through a verified directory handle
      (`openat`/`renameat`), so a symlink swapped in later is never followed.
-   - The asset protocol starts empty. `resolve_image_path` allows one image at a time: inside the
-     document's git repository (or its folder), a regular image file, at most 32 MB. Drops are
-     forbidden in the asset scope again because Tauri allows them automatically.
+   - Local images are served by our own `ovimg:` scheme (`images.rs`), not Tauri's asset protocol.
+     `resolve_image_path` issues a random token for one file inside the document's git repository
+     (or its folder), bound to that file's identity; the scheme serves only issued tokens, at most
+     32 MB, off the main thread. Images elsewhere need a folder grant from a native prompt
+     (`allow_image_folder`, never the home folder, forgotten on quit).
+   - Pasted and dropped images (`insert_image`, `insert_dropped_image`) are copied into the folder
+     chosen in Preferences (`settings.rs` accepts only `assets`, `{name}.assets`, `.`), never over an
+     existing file and never through a symlinked folder. A dropped file is usable once, and only if
+     it was dropped on a window.
+   - Folder grants and authorized documents are app-wide, not per window: every window runs the
+     same trusted frontend, and a compromised one could already read any authorized document.
+   - Text files are decoded in Rust (`documents::decode`); NUL bytes without a BOM mean binary and
+     are refused. A save that the file's encoding can't hold fails with `unmappable:` rather than
+     writing replacement characters.
+   - Platform code lives in `src-tauri/src/platform/`: descriptor-based on macOS, a portable
+     fallback elsewhere that opens without following links and checks the opened handle.
    - Images from loopback, private, and link-local hosts are blocked (`imageUrlAllowed`).
    - Permissions are per window: `capabilities/documents.json` and `capabilities/preferences.json`,
      with app commands declared in `build.rs`. A new command needs an entry in both places.

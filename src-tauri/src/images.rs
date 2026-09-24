@@ -246,6 +246,165 @@ pub async fn allow_image_folder<R: Runtime>(app: tauri::AppHandle<R>, document_p
   Ok(yes)
 }
 
+// ---------- Pasting and dropping images into a document ----------
+
+// Image files the user dropped on a window, each usable once by `insert_dropped_image`.
+#[derive(Default)]
+pub struct DroppedImages(pub Mutex<HashSet<PathBuf>>);
+
+pub fn droppable_images(paths: &[PathBuf]) -> Vec<PathBuf> {
+  paths.iter().filter_map(|p| fs::canonicalize(p).ok()).filter(|p| is_image_file(p)).collect()
+}
+
+#[derive(serde::Serialize, Debug)]
+pub struct InsertedImage {
+  pub markdown: String,
+}
+
+// The folder images go in for a document, from the "imageFolder" setting.
+fn target_folder(document: &Path, setting: &str) -> Option<PathBuf> {
+  let dir = document.parent()?;
+  Some(match setting {
+    "{name}.assets" => dir.join(format!("{}.assets", document.file_stem()?.to_string_lossy())),
+    "." => dir.to_path_buf(),
+    _ => dir.join("assets"),
+  })
+}
+
+// Make sure the image folder is a real folder directly inside the document's folder, creating it if
+// needed; a symlink or a file in its place is refused.
+fn ensure_folder(folder: &Path, document_dir: &Path) -> Result<PathBuf, String> {
+  match fs::symlink_metadata(folder) {
+    Ok(meta) if meta.file_type().is_symlink() => return Err(format!("{} is a symbolic link; images won't be saved there", path_name(folder))),
+    Ok(meta) if !meta.is_dir() => return Err(format!("{} exists and isn't a folder", path_name(folder))),
+    Ok(_) => {}
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::create_dir(folder).map_err(|e| e.to_string())?,
+    Err(e) => return Err(e.to_string()),
+  }
+  let canonical = fs::canonicalize(folder).map_err(|e| e.to_string())?;
+  let expected = if folder == document_dir { document_dir.to_path_buf() } else { document_dir.join(folder.file_name().unwrap_or_default()) };
+  if canonical != expected { return Err(format!("{} isn't inside the document's folder", path_name(folder))); }
+  Ok(canonical)
+}
+
+// A safe file name from a hint: no separators, control characters, or leading dots; short.
+fn file_name_from(hint: &str) -> Option<(String, String)> {
+  let base = hint.rsplit(['/', '\\']).next()?.trim();
+  let (stem, ext) = base.rsplit_once('.')?;
+  let ext = ext.to_ascii_lowercase();
+  if !IMAGE_EXTENSIONS.contains(&ext.as_str()) { return None; }
+  let stem: String = stem.chars().filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+  let stem = stem.trim().trim_start_matches('.').chars().take(100).collect::<String>();
+  Some((if stem.is_empty() { "image".into() } else { stem }, ext))
+}
+
+// Store image bytes for a document and return the stored file. Reuses an identical file already in the
+// folder; otherwise picks a free name (`name.png`, `name-1.png`, ...) without overwriting anything.
+fn store_image(document: &Path, setting: &str, name_hint: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+  if bytes.is_empty() { return Err("The image is empty.".into()); }
+  if bytes.len() as u64 > IMAGE_LIMIT { return Err("The image is larger than 32 MB.".into()); }
+  let (stem, ext) = file_name_from(name_hint).ok_or("That file type isn't a supported image.")?;
+  let document_dir = document.parent().ok_or("Invalid document path")?;
+  let folder = ensure_folder(&target_folder(document, setting).ok_or("Invalid document path")?, document_dir)?;
+  if let Ok(entries) = fs::read_dir(&folder) {
+    for entry in entries.flatten().take(5000) {
+      let path = entry.path();
+      let same_size = entry.metadata().is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64);
+      if same_size && has_extension(&path, &[ext.as_str()]) && fs::read(&path).is_ok_and(|b| b == bytes) {
+        return Ok(path);
+      }
+    }
+  }
+  for n in 0..1000 {
+    let name = if n == 0 { format!("{stem}.{ext}") } else { format!("{stem}-{n}.{ext}") };
+    let target = folder.join(&name);
+    match platform::create_file(&target, bytes) {
+      Ok(()) => return Ok(target),
+      Err(e) if e.starts_with(platform::EXISTS) => continue,
+      Err(e) => return Err(e),
+    }
+  }
+  Err("Couldn't find a free file name for the image.".into())
+}
+
+// The Markdown for an image: a path relative to the document, `/`-separated, with characters that
+// would end or break a link destination percent-encoded (spaces, parentheses, <, >, #, ?, %).
+fn markdown_for(document: &Path, image: &Path) -> Option<String> {
+  let relative = image.strip_prefix(document.parent()?).ok()?;
+  let encoded: Vec<String> = relative.components().map(|c| {
+    c.as_os_str().to_string_lossy().chars().map(|ch| match ch {
+      ' ' => "%20".into(), '(' => "%28".into(), ')' => "%29".into(), '<' => "%3C".into(), '>' => "%3E".into(),
+      '#' => "%23".into(), '?' => "%3F".into(), '%' => "%25".into(), c => c.to_string(),
+    }).collect()
+  }).collect();
+  let alt: String = image.file_stem()?.to_string_lossy().chars().filter(|c| !matches!(c, '[' | ']' | '\\')).collect();
+  Some(format!("![{alt}]({})", encoded.join("/")))
+}
+
+fn insert(
+  authorized: &AuthorizedDocuments,
+  settings: &crate::settings::SettingsState,
+  document_path: &str,
+  name_hint: &str,
+  bytes: &[u8],
+) -> Result<InsertedImage, String> {
+  let document = authorized.require(Path::new(document_path), false)?;
+  let setting = settings.0.lock().unwrap().image_folder.clone();
+  let stored = store_image(&document, &setting, name_hint, bytes)?;
+  Ok(InsertedImage { markdown: markdown_for(&document, &stored).ok_or("Couldn't link the image")? })
+}
+
+fn percent_decode(s: &str) -> String {
+  let bytes = s.as_bytes();
+  let mut out = Vec::with_capacity(bytes.len());
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] == b'%' && i + 2 < bytes.len() {
+      let hex = |b: u8| (b as char).to_digit(16);
+      if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+        out.push((h * 16 + l) as u8);
+        i += 3;
+        continue;
+      }
+    }
+    out.push(bytes[i]);
+    i += 1;
+  }
+  String::from_utf8_lossy(&out).into_owned()
+}
+
+// Pasted image bytes arrive as the raw request body; the document path and a file name hint arrive
+// percent-encoded in headers (header values must be ASCII).
+#[tauri::command]
+pub async fn insert_image(
+  request: tauri::ipc::Request<'_>,
+  authorized: tauri::State<'_, AuthorizedDocuments>,
+  settings: tauri::State<'_, crate::settings::SettingsState>,
+) -> Result<InsertedImage, String> {
+  let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("Expected image bytes".into()) };
+  let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(percent_decode);
+  let document = header("x-document").ok_or("Missing document")?;
+  let name = header("x-name").unwrap_or_else(|| "image.png".into());
+  insert(&authorized, &settings, &document, &name, bytes)
+}
+
+// A file the user dropped on this window. Each drop allows each file once.
+#[tauri::command]
+pub async fn insert_dropped_image(
+  document_path: String,
+  source: String,
+  authorized: tauri::State<'_, AuthorizedDocuments>,
+  settings: tauri::State<'_, crate::settings::SettingsState>,
+  dropped: tauri::State<'_, DroppedImages>,
+) -> Result<InsertedImage, String> {
+  let source = fs::canonicalize(&source).map_err(|e| e.to_string())?;
+  if !dropped.0.lock().unwrap().remove(&source) { return Err("That image wasn't dropped on this window.".into()); }
+  let file = platform::open_for_read(&source)?;
+  let mut bytes = Vec::new();
+  file.take(IMAGE_LIMIT + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+  insert(&authorized, &settings, &document_path, &source.file_name().unwrap_or_default().to_string_lossy(), &bytes)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -364,5 +523,52 @@ mod tests {
     assert!(matches!(resolve(&grants, &other, &src, Some(&home)), Resolution::Blocked { .. }), "grant is per document");
     assert_eq!(grantable_folder(&home.join("root.png"), Some(&home)), None);
     let _ = fs::remove_dir_all(d);
+  }
+
+  #[test]
+  fn stored_images_go_in_assets_and_are_linked_relatively() {
+    let d = dir("store");
+    let doc = d.join("My Notes.md");
+    fs::write(&doc, "").unwrap();
+    let png = b"\x89PNG fake";
+    let first = store_image(&doc, "assets", "image-20260924-120000.png", png).unwrap();
+    assert_eq!(first, d.join("assets/image-20260924-120000.png"));
+    assert_eq!(markdown_for(&doc, &first).unwrap(), "![image-20260924-120000](assets/image-20260924-120000.png)");
+    // The same bytes again reuse the file; different bytes under the same name get a new name.
+    assert_eq!(store_image(&doc, "assets", "other name.png", png).unwrap(), first);
+    let second = store_image(&doc, "assets", "image-20260924-120000.png", b"different").unwrap();
+    assert_eq!(second, d.join("assets/image-20260924-120000-1.png"));
+    // Per-document folders and awkward names.
+    let per_doc = store_image(&doc, "{name}.assets", "a (1) #x.jpg", b"jpeg").unwrap();
+    assert_eq!(per_doc, d.join("My Notes.assets/a (1) #x.jpg"));
+    assert_eq!(markdown_for(&doc, &per_doc).unwrap(), "![a (1) #x](My%20Notes.assets/a%20%281%29%20%23x.jpg)");
+    // Names can't escape or hide; types must be images.
+    let sneaky = store_image(&doc, "assets", "../../.evil.png", b"x").unwrap();
+    assert_eq!(sneaky.parent().unwrap(), d.join("assets"));
+    assert!(!sneaky.file_name().unwrap().to_string_lossy().starts_with('.'));
+    assert!(store_image(&doc, "assets", "run.sh", b"x").is_err());
+    assert!(store_image(&doc, "assets", "big.png", &vec![0u8; (IMAGE_LIMIT + 1) as usize]).is_err());
+    let _ = fs::remove_dir_all(d);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_symlinked_assets_folder_is_refused() {
+    let d = dir("symassets");
+    let elsewhere = dir("elsewhere");
+    let doc = d.join("page.md");
+    fs::write(&doc, "").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, d.join("assets")).unwrap();
+    assert!(store_image(&doc, "assets", "a.png", b"png").unwrap_err().contains("symbolic link"));
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+    let _ = fs::remove_dir_all(d);
+    let _ = fs::remove_dir_all(elsewhere);
+  }
+
+  #[test]
+  fn percent_decoding_of_headers() {
+    assert_eq!(percent_decode("%2FUsers%2Fme%2F%E6%9C%83%E8%AD%B0.md"), "/Users/me/會議.md");
+    assert_eq!(percent_decode("100%"), "100%");
+    assert_eq!(percent_decode("%zz"), "%zz");
   }
 }

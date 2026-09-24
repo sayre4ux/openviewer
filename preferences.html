@@ -8,9 +8,10 @@
   <body>
     <div class="prefs">
       <nav class="prefs-nav" aria-label="Preferences sections">
-        <button class="prefs-tab is-active" type="button" aria-current="page">Shortcuts</button>
+        <button class="prefs-tab is-active" type="button" data-pane="shortcuts" aria-current="page">Shortcuts</button>
+        <button class="prefs-tab" type="button" data-pane="images">Images</button>
       </nav>
-      <main class="prefs-main">
+      <main class="prefs-main" id="pane-shortcuts">
         <header class="prefs-head">
           <h1>Shortcuts</h1>
           <input id="search" class="prefs-search" type="search" placeholder="Search commands" autocomplete="off" spellcheck="false" />
@@ -21,6 +22,27 @@
           <button id="open-file" class="prefs-link" type="button">Open keybindings file</button>
           <span id="reset-all-wrap"><button id="reset-all" class="prefs-link" type="button">Reset all</button></span>
         </footer>
+      </main>
+      <main class="prefs-main" id="pane-images" hidden>
+        <header class="prefs-head">
+          <h1>Images</h1>
+        </header>
+        <div class="prefs-list">
+          <section class="prefs-group">
+            <h2>When you paste or drop an image</h2>
+            <p class="prefs-help">OpenViewer copies it into a folder next to the document and links it with a relative path, so the document and its images move together.</p>
+            <fieldset id="image-folder" class="prefs-choices">
+              <legend class="prefs-sr">Copy images to</legend>
+              <label class="prefs-choice"><input type="radio" name="image-folder" value="assets" />
+                <span><strong>./assets</strong> <span class="prefs-choice-note">one folder shared by the documents beside it</span></span></label>
+              <label class="prefs-choice"><input type="radio" name="image-folder" value="{name}.assets" />
+                <span><strong>./<em>document name</em>.assets</strong> <span class="prefs-choice-note">a folder for each document, as Typora does</span></span></label>
+              <label class="prefs-choice"><input type="radio" name="image-folder" value="." />
+                <span><strong>./</strong> <span class="prefs-choice-note">right next to the document</span></span></label>
+            </fieldset>
+            <p class="prefs-help">An Untitled document is saved first, so the images have somewhere to go.</p>
+          </section>
+        </div>
       </main>
     </div>
     <script type="module" src="/src/prefs/main.ts"></script>

@@ -233,3 +233,45 @@ kbd {
 .prefs-link[hidden] {
   display: none;
 }
+
+.prefs-main[hidden] {
+  display: none;
+}
+.prefs-help {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font: 13px/1.5 var(--sans);
+}
+.prefs-choices {
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+.prefs-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+.prefs-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px dotted var(--rule);
+  font-size: 15px;
+}
+.prefs-choice input {
+  accent-color: var(--accent);
+}
+.prefs-choice strong {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+.prefs-choice-note {
+  margin-left: 6px;
+  color: var(--muted);
+  font: 13px var(--sans);
+}

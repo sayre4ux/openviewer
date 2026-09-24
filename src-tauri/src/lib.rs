@@ -11,6 +11,7 @@ mod documents;
 mod images;
 mod menu;
 mod platform;
+mod settings;
 
 use documents::{authorize_document, droppable_documents, AuthorizedDocuments};
 
@@ -111,6 +112,8 @@ pub fn run() {
     .manage(LastDocument::default())
     .manage(AuthorizedDocuments::default())
     .manage(images::ImageGrants::default())
+    .manage(images::DroppedImages::default())
+    .manage(settings::SettingsState::default())
     // Local images are served from our own scheme, never from a directory scope. The file is read on
     // a worker thread: WebKit calls scheme handlers on the main thread.
     .register_asynchronous_uri_scheme_protocol(images::SCHEME, |ctx, request, responder| {
@@ -126,6 +129,7 @@ pub fn run() {
         app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
       }
       menu::load(app.handle())?;
+      settings::load(app.handle());
       // Windows and Linux pass files to open as arguments; macOS sends RunEvent::Opened instead.
       #[cfg(not(target_os = "macos"))]
       for arg in std::env::args_os().skip(1) {
@@ -143,7 +147,7 @@ pub fn run() {
       let Some(focused) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false)) else { return };
       // File commands chosen while Preferences is in front go to the last document window;
       // Preferences handles everything else itself (Close, Quit, Undo in its search field).
-      let for_document = matches!(id, "new" | "open" | "save" | "save-as");
+      let for_document = matches!(id, "new" | "open" | "save" | "save-as" | "save-as-utf8");
       let target = if focused.label() == "preferences" && for_document {
         app.state::<LastDocument>().0.lock().unwrap().clone().filter(|label| app.get_webview_window(label).is_some())
       } else {
@@ -171,6 +175,17 @@ pub fn run() {
         let app = window.app_handle();
         let allowed: Vec<_> = droppable_documents(paths).into_iter().filter_map(|p| authorize_document(app, p, false).ok()).collect();
         if !allowed.is_empty() { let _ = app.emit_to(window.label(), "authorized-drop", allowed); }
+        // Dropped images are copied next to the document (insert_dropped_image), once each.
+        let images = images::droppable_images(paths);
+        if !images.is_empty() {
+          app.state::<images::DroppedImages>().0.lock().unwrap().extend(images.iter().cloned());
+          let (x, y) = match event {
+            tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { position, .. }) => (position.x, position.y),
+            _ => (0.0, 0.0),
+          };
+          let paths: Vec<String> = images.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+          let _ = app.emit_to(window.label(), "dropped-images", serde_json::json!({ "paths": paths, "x": x, "y": y }));
+        }
       }
       _ => {}
     })
@@ -181,6 +196,10 @@ pub fn run() {
       documents::save_dialog,
       images::resolve_image_path,
       images::allow_image_folder,
+      images::insert_image,
+      images::insert_dropped_image,
+      settings::get_settings,
+      settings::set_settings,
       create_document_window,
       frontend_ready,
       sync_view_menu,

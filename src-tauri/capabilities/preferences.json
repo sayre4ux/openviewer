@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "preferences",
   "description": "Shortcut preferences without document access",
-  "windows": ["preferences"],
+  "windows": [
+    "preferences"
+  ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
@@ -11,6 +13,8 @@
     "allow-get-keybindings",
     "allow-set-keybindings",
     "allow-open-keybindings-file",
-    "allow-suspend-shortcuts"
+    "allow-suspend-shortcuts",
+    "allow-get-settings",
+    "allow-set-settings"
   ]
 }

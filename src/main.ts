@@ -8,6 +8,7 @@ import { lineEndings, makeState, replaceDocument } from "./app/document";
 import { createOutline } from "./app/outline";
 import { localImageCandidate, resolveClose, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
+import { isInsertableImage, pastedImageName } from "./app/imageNames";
 import { codeHighlight } from "./editor/codeHighlight";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
@@ -31,6 +32,8 @@ const typewriterComp = new Compartment();
 const shortcutsComp = new Compartment();
 let overrides: Overrides = {};
 let documentChanged: () => void = () => undefined;
+// Set by the Tauri shell; in the browser build pasting an image does nothing special.
+let imagePaste: ((files: File[]) => void) | null = null;
 
 // Outline and word count are remembered across launches; the other modes start off.
 const remembered = (key: string, fallback: boolean) => {
@@ -75,6 +78,15 @@ function extensionsForDocument(): Extension[] {
     focusComp.of(modes.focus ? focusMode : []),
     typewriterComp.of(modes.typewriter ? typewriter : []),
     shortcutsComp.of(shortcutKeymap()),
+    EditorView.domEventHandlers({
+      paste: (event) => {
+        const files = Array.from(event.clipboardData?.files ?? []).filter((f) => isInsertableImage(f.type));
+        if (!files.length || !imagePaste) return false;
+        event.preventDefault();
+        imagePaste(files);
+        return true;
+      },
+    }),
     keymap.of([
       ...typoraKeymap,
       indentWithTab,
@@ -197,6 +209,14 @@ const doc: ShellDocument = {
   getText: () => view.state.sliceDoc(),
   getBom: () => hasBom,
   setBom: (value) => { hasBom = value; },
+  insertText: (text, at) => {
+    const pos = at ?? view.state.selection.main.head;
+    const { from, to } = at == null ? view.state.selection.main : { from: pos, to: pos };
+    view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent: "input", scrollIntoView: true });
+    view.focus();
+  },
+  positionAt: (x, y) => view.posAtCoords({ x, y }),
+  onImagePaste: (handler) => { imagePaste = handler; },
   getEncoding: () => encoding,
   setEncoding: (value) => {
     encoding = value;
@@ -233,6 +253,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   lineEndings,
   imageUrlAllowed,
   localImageCandidate,
+  pastedImageName,
   snapshot: () => doc.snapshot(),
   saved: (next: Text) => doc.saved(next),
   isDirty: () => doc.isDirty(),

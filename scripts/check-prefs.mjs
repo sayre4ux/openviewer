@@ -120,6 +120,18 @@ await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.st
 await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
 check("modifier order normalized", (await row("Bold").locator("kbd").textContent()) === "⇧⌘K" && (await row("Italic").locator("kbd").textContent()) === "⌘I");
 
+// Preferences → Images: the folder choice is kept, and only one pane shows at a time.
+await page.evaluate(() => localStorage.removeItem("openviewer.settings"));
+await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.click('.prefs-tab[data-pane="images"]'); await settle();
+check("images tab shows its pane", await page.isVisible("#pane-images") && !(await page.isVisible("#pane-shortcuts")));
+check("images default to ./assets", await page.isChecked('input[name="image-folder"][value="assets"]'));
+await page.click('input[name="image-folder"][value="{name}.assets"]'); await settle();
+await page.screenshot({ path: `${out}/p4-images.png` });
+await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+check("image folder choice kept", await page.isChecked('input[name="image-folder"][value="{name}.assets"]'),
+  await page.evaluate(() => localStorage.getItem("openviewer.settings")));
+
 // Undo rebound onto a key cells use for navigation still undoes in a cell.
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ undo: "Cmd+Left" })));
 await page.setViewportSize({ width: 1100, height: 700 });

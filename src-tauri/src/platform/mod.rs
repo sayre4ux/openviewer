@@ -5,14 +5,18 @@
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::{open_for_read, replace_file};
+pub use macos::{create_file, open_for_read, replace_file};
 
-#[cfg(not(target_os = "macos"))]
+// Also compiled for tests on macOS, so the fallback is exercised before a port needs it.
+#[cfg(any(not(target_os = "macos"), test))]
 mod portable;
 #[cfg(not(target_os = "macos"))]
-pub use portable::{open_for_read, replace_file};
+pub use portable::{create_file, open_for_read, replace_file};
 
 use std::path::Path;
+
+// `create_file` errors start with this when the name is already taken.
+pub const EXISTS: &str = "exists:";
 
 pub(crate) fn path_name(path: &Path) -> String {
   path.file_name().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty())

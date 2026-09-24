@@ -113,11 +113,12 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<Decoded, String> {
     if had_errors { return Err(format!("{name} isn't valid {}", encoding.name())); }
     return Ok(Decoded { text: text.into_owned(), bom: true, encoding: encoding.name().into(), exact: true });
   }
+  // DECISION: without a BOM, a NUL byte means a binary file (an image, a PDF), not text. UTF-16 without
+  // a BOM is refused too: it's rare, and guessing it wrong turns a binary file into garbage text.
+  if bytes.contains(&0) { return Err(format!("{name} looks like a binary file, not text")); }
   if let Ok(text) = std::str::from_utf8(bytes) {
     return Ok(Decoded { text: text.to_owned(), bom: false, encoding: "UTF-8".into(), exact: true });
   }
-  // DECISION: a NUL byte outside UTF-16 means a binary file (an image, a PDF), not text in some encoding.
-  if bytes.contains(&0) { return Err(format!("{name} looks like a binary file, not text")); }
   let mut detector = chardetng::EncodingDetector::new();
   detector.feed(bytes, true);
   let encoding = detector.guess(None, true);
@@ -470,5 +471,8 @@ mod tests {
   fn binary_files_are_refused() {
     let err = decode(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\xff\xfe", "pic.md").unwrap_err();
     assert!(err.contains("binary"), "{err}");
+    // Valid UTF-8 with NULs, and UTF-16 without a BOM, are not text either.
+    assert!(decode(b"abc\x00def", "data.md").unwrap_err().contains("binary"));
+    assert!(decode(b"h\x00i\x00", "le.md").unwrap_err().contains("binary"));
   }
 }

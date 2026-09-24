@@ -1,6 +1,7 @@
 import type { Text } from "@codemirror/state";
 import { setImageResolver } from "../editor/livePreview";
 import { lineEndings } from "./document";
+import { pastedImageName } from "./imageNames";
 
 export interface ShellDocument {
   getText(): string;
@@ -15,6 +16,12 @@ export interface ShellDocument {
   snapshot(): { text: string; doc: Text };
   saved(doc: Text): void;
   refreshImages(): void;
+  // Insert text at a document position (or the selection) as one undoable edit.
+  insertText(text: string, at?: number | null): void;
+  // The document position under a point in window coordinates (CSS pixels), if any.
+  positionAt(x: number, y: number): number | null;
+  // Image files pasted into the editor are handed to this (Tauri only).
+  onImagePaste(handler: (files: File[]) => void): void;
   onChange(callback: () => void): void;
 }
 
@@ -46,11 +53,14 @@ export async function resolveClose(
 // A local image's absolute path, normalized. Not a security check: Rust (`resolve_image_path`)
 // decides which files a document may show. Handles percent-encoding (Typora writes `my%20shot.png`),
 // `<...>` destinations, and Windows drive paths.
+const UTF8 = { encoding: "UTF-8", bom: false };
+
 export function localImageCandidate(source: string, documentPath: string): string | null {
   let raw = source.trim();
   if (raw.startsWith("<") && raw.endsWith(">")) raw = raw.slice(1, -1);
   try {
-    raw = decodeURI(raw);
+    // decodeURIComponent, not decodeURI: `images%2Fpic.png` names images/pic.png.
+    raw = decodeURIComponent(raw);
   } catch {
     // Not valid percent-encoding: use it as written.
   }
@@ -113,11 +123,16 @@ export async function startShell(
     void win.setTitle(`${doc.isDirty() ? "• " : ""}${name}`);
   };
   doc.onChange(title);
-  const saveTo = async (target: string): Promise<boolean> => {
+  // `as` overrides the file's encoding for this write; it becomes the document's only if the write succeeds.
+  const saveTo = async (target: string, as?: { encoding: string; bom: boolean }): Promise<boolean> => {
     // Taken before the await: keystrokes during a slow write must stay unsaved.
     const snap = doc.snapshot();
+    const encoding = as?.encoding ?? doc.getEncoding();
+    const bom = as?.bom ?? doc.getBom();
     try {
-      await call("write_document", { path: target, text: snap.text, bom: doc.getBom(), encoding: doc.getEncoding() });
+      await call("write_document", { path: target, text: snap.text, bom, encoding });
+      doc.setEncoding(encoding);
+      doc.setBom(bom);
       path = target;
       doc.saved(snap.doc);
       doc.refreshImages();
@@ -131,9 +146,7 @@ export async function startShell(
           title: "Can’t Save in This Encoding", kind: "warning", buttons: { ok: "Save as UTF-8", cancel: "Cancel" },
         });
         if (choice !== "Save as UTF-8" && choice !== "Ok") return false;
-        doc.setEncoding("UTF-8");
-        doc.setBom(false);
-        return saveTo(target);
+        return saveTo(target, UTF8);
       }
       await message(text, { title: "Couldn’t save document", kind: "error" });
       return false;
@@ -177,6 +190,35 @@ export async function startShell(
       );
     }
   };
+  // Images need the document's folder, so an Untitled document is saved first (with the user's OK).
+  const documentForImages = async (): Promise<string | null> => {
+    if (path) return path;
+    const choice = await message("Save this document first, so the image can be stored in a folder next to it.", {
+      title: "Save Before Adding Images", kind: "info", buttons: { ok: "Save…", cancel: "Cancel" },
+    });
+    if (choice !== "Save…" && choice !== "Ok") return null;
+    return (await saveAs()) ? path : null;
+  };
+  const insertImages = async (files: File[]) => {
+    const documentPath = await documentForImages();
+    if (!documentPath) return;
+    const links: string[] = [];
+    for (const file of files) {
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const name = pastedImageName(file.name, file.type, new Date());
+        const inserted = await call<{ markdown: string }>("insert_image", bytes, {
+          headers: { "x-document": encodeURIComponent(documentPath), "x-name": encodeURIComponent(name) },
+        });
+        links.push(inserted.markdown);
+      } catch (error) {
+        await message(String(error), { title: "Couldn’t add the image", kind: "error" });
+      }
+    }
+    if (links.length) doc.insertText(links.join(" "));
+  };
+  doc.onImagePaste((files) => void insertImages(files));
+
   const openPath = async (target: string): Promise<void> => {
     if (doc.isUntouched()) await openIntoCurrent(target);
     else await call("create_document_window", { path: target });
@@ -237,9 +279,8 @@ export async function startShell(
       case "save-as": await saveAs(); break;
       case "close-window": await win.close(); break;
       case "save-as-utf8":
-        doc.setEncoding("UTF-8");
-        doc.setBom(false);
-        await save();
+        if (path) await saveTo(path, UTF8);
+        else await saveAs();
         break;
       case "quit": {
         // DECISION: each window handles its own prompt, so Cancel keeps that document open.
@@ -272,6 +313,22 @@ export async function startShell(
     if (closing) return;
     event.preventDefault();
     if (await askToClose()) { closing = true; await win.close(); }
+  });
+  // Image files dropped on the window: copied next to the document and linked where they were dropped.
+  await win.listen<{ paths: string[]; x: number; y: number }>("dropped-images", async ({ payload }) => {
+    const documentPath = await documentForImages();
+    if (!documentPath) return;
+    const scale = window.devicePixelRatio || 1;
+    const at = doc.positionAt(payload.x / scale, payload.y / scale);
+    const links: string[] = [];
+    for (const source of payload.paths) {
+      try {
+        links.push((await call<{ markdown: string }>("insert_dropped_image", { documentPath, source })).markdown);
+      } catch (error) {
+        await message(String(error), { title: "Couldn’t add the image", kind: "error" });
+      }
+    }
+    if (links.length) doc.insertText(links.join(" "), at);
   });
   await win.listen<string[]>("authorized-drop", async ({ payload: paths }) => {
     for (const dropped of paths) {

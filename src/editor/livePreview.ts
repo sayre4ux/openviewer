@@ -138,10 +138,8 @@ function blockedImageNode(altText: string, offer?: BlockedImage) {
     const name = offer.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || offer.folder;
     button.textContent = `Show images from “${name}”…`;
     button.title = offer.folder;
-    button.addEventListener("mousedown", (e) => {
-      e.preventDefault(); // keep the editor selection where it is
-      void offer.allow();
-    });
+    button.addEventListener("mousedown", (e) => e.preventDefault()); // keep the editor selection where it is
+    button.addEventListener("click", () => void offer.allow());
     el.appendChild(button);
   }
   return el;
@@ -152,6 +150,7 @@ function blockedImageNode(altText: string, offer?: BlockedImage) {
 export function imageUrlAllowed(raw: string): boolean {
   const src = raw.trim();
   if (/^data:image\//i.test(src)) return true;
+  if (/^[a-z]:[\\/]/i.test(src)) return true; // a Windows drive path, not a URL scheme
   if (/^[a-z][a-z0-9+.-]*:/i.test(src)) {
     if (!/^https?:\/\//i.test(src)) return false;
     try {

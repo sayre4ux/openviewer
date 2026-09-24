@@ -25,6 +25,9 @@
     "allow-save-dialog",
     "allow-resolve-image-path",
     "allow-allow-image-folder",
-    "allow-get-keybindings"
+    "allow-get-keybindings",
+    "allow-insert-image",
+    "allow-insert-dropped-image",
+    "allow-get-settings"
   ]
 }

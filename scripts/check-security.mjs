@@ -97,14 +97,24 @@ try {
       badEscape: c("a%zz.png", "/Users/example/Notes/page.md"),
       windowsRelative: c("..\\img\\a.png", "C:\\Users\\me\\Docs\\page.md"),
       windowsAbsolute: c("D:/pics/b.png", "C:\\Users\\me\\Docs\\page.md"),
+      encodedSlash: c("images%2Fpic.png", "/Users/example/Notes/page.md"),
+      driveAllowed: window.__ov.imageUrlAllowed("C:\\pics\\a.png") && window.__ov.imageUrlAllowed("d:/pics/a.png"),
+      names: [
+        window.__ov.pastedImageName("image.png", "image/png", new Date(2026, 8, 24, 9, 5, 7)),
+        window.__ov.pastedImageName("", "image/jpeg", new Date(2026, 8, 24, 9, 5, 7)),
+        window.__ov.pastedImageName("diagram.webp", "image/webp", new Date()),
+      ].join(","),
     };
   });
-  check("image paths: percent-encoding, <...>, Windows",
+  check("image paths: percent-encoding, <...>, Windows, pasted names",
     decoded.encoded === "/Users/example/Notes/assets/my shot.png" &&
     decoded.angle === "/Users/example/Notes/assets/my shot.png" &&
     decoded.badEscape === "/Users/example/Notes/a%zz.png" &&
     decoded.windowsRelative === "C:/Users/me/img/a.png" &&
-    decoded.windowsAbsolute === "D:/pics/b.png",
+    decoded.windowsAbsolute === "D:/pics/b.png" &&
+    decoded.encodedSlash === "/Users/example/Notes/images/pic.png" &&
+    decoded.driveAllowed &&
+    decoded.names === "image-20260924-090507.png,image-20260924-090507.jpg,diagram.webp",
     JSON.stringify(decoded));
 
   // The prefilter only normalizes; the folder/repository boundary is enforced in Rust (cargo tests).

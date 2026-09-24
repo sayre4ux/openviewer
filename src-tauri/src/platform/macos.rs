@@ -11,7 +11,7 @@ use std::{
   sync::atomic::{AtomicU64, Ordering},
 };
 
-use super::path_name;
+use super::{path_name, EXISTS};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -82,6 +82,16 @@ fn create_temp(dirfd: libc::c_int, name: &OsStr) -> Result<(CString, fs::File), 
 // Atomically replace (or create) `target` with `bytes`. The final name is never followed; the parent
 // directory descriptor is verified with F_GETPATH.
 pub fn replace_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
+  write_via_temp(target, bytes, false)
+}
+
+// Create `target` with `bytes`, failing if anything already exists at that name (RENAME_EXCL), so a
+// file created in the meantime is never overwritten.
+pub fn create_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
+  write_via_temp(target, bytes, true)
+}
+
+fn write_via_temp(target: &Path, bytes: &[u8], exclusive: bool) -> Result<(), String> {
   let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("/"));
   let name = target.file_name().ok_or_else(|| "Invalid file path".to_string())?;
   let dir = OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW).open(parent).map_err(|e| e.to_string())?;
@@ -91,7 +101,7 @@ pub fn replace_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
   }
   let dirfd = dir.as_raw_fd();
   let name_c = CString::new(name.as_bytes()).map_err(|_| "Invalid file path".to_string())?;
-  let existing = open_existing(dirfd, &name_c)?;
+  let existing = if exclusive { None } else { open_existing(dirfd, &name_c)? };
   if let Some(existing) = &existing {
     let meta = existing.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() { return Err(format!("{} is not a regular file", path_name(target))); }
@@ -110,8 +120,16 @@ pub fn replace_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
       // DECISION: a group we can't set (EPERM) must not fail the save. fcopyfile reports success anyway.
       let _ = unsafe { libc::fchown(file.as_raw_fd(), -1i32 as libc::uid_t, meta.gid()) };
     }
-    let rc = unsafe { libc::renameat(dirfd, temp_c.as_ptr(), dirfd, name_c.as_ptr()) };
-    if rc != 0 { return Err(std::io::Error::last_os_error().to_string()); }
+    let rc = if exclusive {
+      unsafe { libc::renameatx_np(dirfd, temp_c.as_ptr(), dirfd, name_c.as_ptr(), libc::RENAME_EXCL) }
+    } else {
+      unsafe { libc::renameat(dirfd, temp_c.as_ptr(), dirfd, name_c.as_ptr()) }
+    };
+    if rc != 0 {
+      let err = std::io::Error::last_os_error();
+      if err.kind() == std::io::ErrorKind::AlreadyExists { return Err(format!("{EXISTS}{}", path_name(target))); }
+      return Err(err.to_string());
+    }
     Ok(())
   })();
   if result.is_err() { let _ = unsafe { libc::unlinkat(dirfd, temp_c.as_ptr(), 0) }; }
