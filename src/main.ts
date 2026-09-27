@@ -13,6 +13,7 @@ import { codeHighlight } from "./editor/codeHighlight";
 import { headingSlugs, scrollToAnchor } from "./editor/anchors";
 import { findCommands, findExtension } from "./editor/find";
 import { foldCommands, headingFolding } from "./editor/folding";
+import { htmlToMarkdown } from "./editor/htmlToMarkdown";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { smartTyping, smartTypingKeymap } from "./editor/smartTyping";
 import { focusMode } from "./editor/focusMode";
@@ -90,9 +91,26 @@ function extensionsForDocument(): Extension[] {
     EditorView.domEventHandlers({
       paste: (event) => {
         const files = Array.from(event.clipboardData?.files ?? []).filter((f) => isInsertableImage(f.type));
-        if (!files.length || !imagePaste) return false;
+        if (files.length) {
+          if (!imagePaste) return false;
+          event.preventDefault();
+          imagePaste(files);
+          return true;
+        }
+        const html = event.clipboardData?.getData("text/html");
+        if (!html) return false;
+        const markdown = htmlToMarkdown(html);
+        if (markdown === null) return false;
         event.preventDefault();
-        imagePaste(files);
+        const { state } = view;
+        const { from, to } = state.selection.main;
+        const insert = markdown.replace(/\n/g, state.lineBreak);
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + state.toText(insert).length },
+          userEvent: "input.paste",
+          scrollIntoView: true,
+        });
         return true;
       },
     }),
@@ -309,6 +327,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   imageUrlAllowed,
   headingSlugs: () => headingSlugs(view.state),
   onUpdate: (probe: (u: ViewUpdate) => void) => { updateProbes.push(probe); },
+  htmlToMarkdown,
   // The app reads this from settings.json; off by default, as there.
   setRemoteImages: (on: boolean) => { setRemoteImages(view, on); },
   localImageCandidate,

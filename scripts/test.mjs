@@ -19,15 +19,18 @@ function run(label, cmd, args, opts = {}) {
 run("typecheck", "npx", ["tsc", "--noEmit"]);
 run("rust tests", "cargo", ["test", "--quiet"], { cwd: "src-tauri" });
 
-const vite = spawn("npx", ["vite", "--port", "5173", "--strictPort"], { stdio: ["ignore", "pipe", "inherit"] });
+// OV_PORT lets two checkouts (git worktrees) run their suites at the same time.
+const port = process.env.OV_PORT ?? "5173";
+process.env.OV_URL = `http://localhost:${port}/`;
+const vite = spawn("npx", ["vite", "--port", port, "--strictPort"], { stdio: ["ignore", "pipe", "inherit"] });
 await new Promise((resolve, reject) => {
   // Color codes split "Local:" when FORCE_COLOR is set (as in CI and some terminals), so strip them first.
   vite.stdout.on("data", (d) => String(d).replace(/\x1b\[[0-9;]*m/g, "").includes("Local:") && resolve());
-  vite.on("exit", (code) => reject(new Error(`vite exited (${code}); is port 5173 in use?`)));
+  vite.on("exit", (code) => reject(new Error(`vite exited (${code}); is port ${port} in use?`)));
 });
 try {
   for (const engine of engines) {
-    for (const script of ["shot.mjs", "check-tables.mjs", "check-modes.mjs", "check-prefs.mjs", "check-security.mjs", "check-export.mjs", "check-editing.mjs"]) {
+    for (const script of ["shot.mjs", "check-tables.mjs", "check-modes.mjs", "check-prefs.mjs", "check-security.mjs", "check-paste.mjs", "check-export.mjs", "check-editing.mjs"]) {
       if (script === "shot.mjs" && engine !== "chromium") continue;
       run(`${script} (${engine})`, "node", [join("scripts", script), join(shots, engine), engine]);
     }
