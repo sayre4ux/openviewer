@@ -64,6 +64,26 @@ OpenViewer is a [Tauri 2](https://tauri.app) app. The editor is
 the Markdown text, so nothing is re-serialized when you save. Notes for contributors and coding
 agents are in [AGENTS.md](AGENTS.md).
 
+## Roadmap
+
+Before the first release:
+
+- Remote images off by default, with a setting that explains the risk of turning them on
+- Signing with a Developer ID and notarization
+- Continuous integration
+
+After the first release:
+
+- Dark mode
+- Math and Mermaid diagrams
+- A file tree sidebar
+- A choice of spellcheck language
+- Windows support
+
+## License
+
+[MIT](LICENSE).
+
 ## Credits
 
 - The look follows Typora's Newsprint theme. The CSS here is written from scratch.
