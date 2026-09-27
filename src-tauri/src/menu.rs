@@ -373,6 +373,7 @@ fn build<R: Runtime>(app: &AppHandle<R>, overrides: &HashMap<String, String>, su
   let app_menu = SubmenuBuilder::new(app, "OpenViewer")
     .about(Some(tauri::menu::AboutMetadata { name: Some("OpenViewer".into()), ..Default::default() }))
     .separator()
+    .item(&MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(app)?)
     .item(&MenuItemBuilder::with_id("preferences", "Settings…").accelerator("CmdOrCtrl+Comma").build(app)?)
     .separator()
     .hide().hide_others().show_all().separator()

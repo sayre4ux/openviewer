@@ -13,7 +13,9 @@
     "perf": "node scripts/perf.mjs",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "node scripts/build-app.mjs"
+    "app:build": "node scripts/build-app.mjs",
+    "release": "node scripts/release.mjs",
+    "test:release": "node --test scripts/release.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

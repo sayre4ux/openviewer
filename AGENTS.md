@@ -99,6 +99,8 @@ cd src-tauri && cargo test
    - Images from loopback, private, and link-local hosts are blocked (`imageUrlAllowed`).
    - Permissions are per window: `capabilities/documents.json` and `capabilities/preferences.json`,
      with app commands declared in `build.rs`. A new command needs an entry in both places.
+   - Updater checks, prompts, downloads, and installs are Rust-driven; never grant updater permissions
+     to a webview capability.
    - Opening refuses non-regular files and files over 64 MB; `keybindings.json` over 1 MB is refused
      and is never written through a symlink.
 

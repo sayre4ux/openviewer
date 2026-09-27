@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/sayre4ux/openviewer/releases/download/updates/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_PUBLIC_KEY"
+    }
+  }
+}

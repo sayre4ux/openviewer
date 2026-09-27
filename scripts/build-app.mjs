@@ -11,7 +11,10 @@ const existing = process.env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f")
   ?? process.env.RUSTFLAGS?.trim().split(/\s+/)
   ?? [];
 const flags = [...existing.filter(Boolean), `--remap-path-prefix=${homedir()}=~`];
-const result = spawnSync("npx", ["tauri", "build", "--bundles", "app", ...process.argv.slice(2)], {
+const forwarded = process.argv.slice(2);
+const hasBundleSelection = forwarded.some((argument, index) => argument === "--bundles" || argument.startsWith("--bundles="));
+const args = ["tauri", "build", ...(hasBundleSelection ? [] : ["--bundles", "app"]), ...forwarded];
+const result = spawnSync("npx", args, {
   stdio: "inherit",
   shell: process.platform === "win32",
   env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") },

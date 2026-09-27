@@ -354,8 +354,12 @@ export async function startShell(
   await win.listen<string>("open-path", ({ payload: target }) => {
     pendingOpen = pendingOpen.then(() => openPath(target));
   });
-  await listen("quit-request", async () => {
+  await listen<string | null>("quit-request", async ({ payload: requestId }) => {
     const mayClose = await askToClose();
+    if (typeof requestId === "string") {
+      await call("update_quit_response", { requestId, accepted: mayClose }).catch(() => {});
+      return;
+    }
     if (mayClose) { closing = true; await win.close(); }
   });
 

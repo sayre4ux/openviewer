@@ -204,13 +204,20 @@ store.onChange((next) => {
 if (native) {
   void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
     const { listen } = await import("@tauri-apps/api/event");
+    const { invoke } = await import("@tauri-apps/api/core");
     const win = getCurrentWindow();
     await win.listen<string>("menu", ({ payload }) => {
       if (payload === "close-window") void win.close();
       // The menu takes ⌘Z/⇧⌘Z before the search field sees them.
       if (payload === "undo" || payload === "redo") document.execCommand(payload);
     });
-    await listen("quit-request", () => void win.close());
+    await listen<string | null>("quit-request", async ({ payload: requestId }) => {
+      if (typeof requestId === "string") {
+        await invoke("update_quit_response", { requestId, accepted: true }).catch(() => {});
+        return;
+      }
+      await win.close();
+    });
     // Leaving the window mid-recording must not leave the menu without shortcuts.
     await win.onFocusChanged(({ payload: focused }) => {
       if (!focused && recording) void stopRecording();

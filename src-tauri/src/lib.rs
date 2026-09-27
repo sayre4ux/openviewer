@@ -14,6 +14,7 @@ mod links;
 mod menu;
 mod platform;
 mod settings;
+mod updater;
 
 use documents::{authorize_document, droppable_documents, AuthorizedDocuments};
 
@@ -180,6 +181,8 @@ pub fn run() {
     .manage(images::DroppedImages::default())
     .manage(settings::SettingsState::default())
     .manage(export::ExportTargets::default())
+    .manage(updater::RuntimeState::default())
+    .manage(updater::CloseCoordinator::default())
     // Local images are served from our own scheme, never from a directory scope. The file is read on
     // a worker thread: WebKit calls scheme handlers on the main thread.
     .register_asynchronous_uri_scheme_protocol(images::SCHEME, |ctx, request, responder| {
@@ -193,6 +196,10 @@ pub fn run() {
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
+      }
+      if updater::is_configured(&app.config().plugins.0) {
+        app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+        updater::start_daily_checks(app.handle().clone());
       }
       menu::load(app.handle())?;
       settings::load(app.handle());
@@ -224,6 +231,10 @@ pub fn run() {
         return;
       }
       let id = event.id().as_ref();
+      if id == "check-for-updates" {
+        updater::check_from_menu(app.clone());
+        return;
+      }
       // Every window closes, or asks to save first; Cancel keeps that document open.
       if id == "quit" {
         let _ = app.emit("quit-request", ());
@@ -286,6 +297,7 @@ pub fn run() {
       images::insert_dropped_image,
       settings::get_settings,
       settings::set_settings,
+      updater::update_quit_response,
       export::export_dialog,
       export::export_html,
       export::export_pdf,
@@ -387,6 +399,8 @@ mod tests {
     // Windows never broadcast events: a window could otherwise send "menu" commands to the others.
     assert!(!docs.contains(&serde_json::json!("core:event:allow-emit")));
     assert!(!prefs.contains(&serde_json::json!("core:event:allow-emit")));
+    assert!(!docs.iter().any(|permission| permission.as_str().is_some_and(|value| value.starts_with("updater:"))));
+    assert!(!prefs.iter().any(|permission| permission.as_str().is_some_and(|value| value.starts_with("updater:"))));
     assert!(!prefs.contains(&serde_json::json!("core:window:allow-destroy")));
     for permission in ["allow-read-document", "allow-write-document", "allow-create-document-window", "allow-open-dialog", "allow-save-dialog", "allow-resolve-image-path", "allow-open-linked-document"] {
       assert!(docs.contains(&serde_json::json!(permission)));
