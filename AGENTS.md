@@ -108,8 +108,10 @@ cd src-tauri && cargo test
 
 - In `src/main.ts`, anything used while the `EditorView` is created (`extensionsForDocument`) must
   be defined above it; a `const` defined later throws at startup.
-- macOS menu shortcuts reach the menu before the web page sees the key. The Settings window calls
-  `suspend_shortcuts` while recording a shortcut, and table cells handle their own keys.
+- In WKWebView the page sees a key equivalent (⌘S) before the menu, and a key the page prevents never
+  reaches the menu. The editor's shortcut keymap therefore never uses `preventDefault` for keys it
+  doesn't handle. The Settings window calls `suspend_shortcuts` while recording a shortcut (so the menu
+  doesn't take the key), and table cells handle their own keys.
 - CodeMirror's `WidgetType.updateDOM` keeps a focused table cell alive while its text changes; a
   change in table shape rebuilds the widget and focus moves to `pendingFocus`.
 - The Playwright suites drive the browser build through `window.__ov` and `window.__prefs`, which

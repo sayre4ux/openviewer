@@ -171,8 +171,8 @@ const load = (text: string, path: string | null = null, bom = false, fileEncodin
   wordCount.refresh();
 };
 
-// The customizable shortcuts as a CodeMirror keymap. In the app the menu takes most of these
-// keys first; the keymap covers the rest and runs the browser build used by the tests.
+// The customizable shortcuts as a CodeMirror keymap: the editor's own commands, which also run the
+// browser build used by the tests.
 function shortcutKeymap() {
   const keys = effectiveKeys(overrides);
   return keymap.of(
@@ -185,7 +185,10 @@ function shortcutKeymap() {
         command();
         return true;
       };
-      return key ? [{ key, run, preventDefault: true }] : [];
+      // No preventDefault: a key the editor doesn't handle (Save, New, Open, Export… are the app shell's)
+      // must reach the menu. WKWebView gives the page a key equivalent before the menu, and a prevented
+      // one never gets there, which left ⌘S, ⌘N and ⌘W dead while the editor had focus.
+      return key ? [{ key, run }] : [];
     }),
   );
 }

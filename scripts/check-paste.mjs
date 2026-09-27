@@ -26,6 +26,8 @@ try {
       oneRowTable: convert('<table><tr><td>Only</td><td>Row</td></tr></table>'),
       nestedQuote: convert('<blockquote><p>outer</p><blockquote><p>inner</p></blockquote></blockquote>'),
       // Formatting makes it convert; the rest must stay literal text.
+      // Google Docs wraps a multi-block selection in one inline <b>; the blocks must stay blocks.
+      wrappedBlocks: convert('<b style="font-weight:normal" id="docs-internal-guid-1"><h2>Notes</h2><p>Some <span style="font-weight:700">bold</span>.</p><ul><li>one</li></ul><table><tr><th>A</th></tr><tr><td>1</td></tr></table></b>'),
       escapedText: convert('<p><b>Note</b>: 2 * 3 = 6</p><p># not a heading</p><p>[not a link]</p>'),
       plain: convert('<p>Just plain text &nbsp; with spaces.</p>'),
     };
@@ -37,6 +39,7 @@ try {
     table: "| Name | Value |\n| :--- | :---: |\n| A | one \\| two |\n\nAfter table",
     oneRowTable: "|  |  |\n| --- | --- |\n| Only | Row |",
     nestedQuote: "> outer\n>\n> > inner",
+    wrappedBlocks: "## Notes\n\nSome **bold**.\n\n- one\n\n| A |\n| --- |\n| 1 |",
     escapedText: "**Note**: 2 \\* 3 = 6\n\n\\# not a heading\n\n\\[not a link\\]",
     plain: null,
   };

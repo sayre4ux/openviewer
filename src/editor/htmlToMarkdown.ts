@@ -372,6 +372,13 @@ function renderInlineChildren(element: Element, context: RenderContext): string 
   return renderChildren(Array.from(element.childNodes), context, true);
 }
 
+// An inline element wrapping block elements, like Google Docs' `<b style="font-weight:normal">` around a
+// whole selection, or a `<span>` around paragraphs.
+const blockSelector = [...blockTags, "li", "table"].join(",");
+function wrapsBlocks(element: Element): boolean {
+  return !blockTags.has(tagName(element)) && element.querySelector(blockSelector) !== null;
+}
+
 function renderChildren(nodes: Node[], context: RenderContext, inlineOnly = false): string {
   if (inlineOnly) return nodes.map((node) => renderNode(node, context)).join("");
   const blocks: string[] = [];
@@ -382,7 +389,7 @@ function renderChildren(nodes: Node[], context: RenderContext, inlineOnly = fals
     inline = "";
   };
   for (const node of nodes) {
-    if (node.nodeType === Node.ELEMENT_NODE && blockTags.has(tagName(node as Element))) {
+    if (node.nodeType === Node.ELEMENT_NODE && (blockTags.has(tagName(node as Element)) || wrapsBlocks(node as Element))) {
       flush();
       const rendered = renderNode(node, context).trim();
       if (rendered) blocks.push(rendered);
@@ -432,6 +439,9 @@ function renderNode(node: Node, context: RenderContext): string {
   if (tag === "table") return renderTable(element);
   if (tag === "input") return "";
   if (blockTags.has(tag)) return renderChildren(Array.from(element.childNodes), context);
+  // DECISION: formatting on an element around whole blocks is dropped (Markdown can't make several
+  // paragraphs bold at once); its blocks render with their own formatting.
+  if (wrapsBlocks(element) && !context.tableCell) return renderChildren(Array.from(element.childNodes), context);
 
   const style = tag === "span" ? spanStyles(element) : { bold: false, italic: false, strike: false };
   const bold = tag === "strong" || (tag === "b" && isBoldB(element)) || style.bold;

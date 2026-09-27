@@ -86,6 +86,25 @@ try {
   check("Find Next moves on from an empty match (^)", heads[0] < heads[1] && heads[1] < heads[2], JSON.stringify(heads));
   await fields.nth(0).press("Escape");
 
+  // Keys the editor doesn't handle (Save, New, Open…) must not be prevented: in WKWebView the page
+  // sees ⌘S before the menu, and a prevented key never reaches it.
+  await load("keys\n", 2);
+  const prevented = await page.evaluate(() => {
+    const seen = {};
+    const listener = (e) => { seen[e.key.toLowerCase()] = e.defaultPrevented; };
+    window.addEventListener("keydown", listener);
+    window.__keysSeen = seen;
+    window.__keysListener = listener;
+    return true;
+  });
+  await page.keyboard.press(`${mod}+s`);
+  await page.keyboard.press(`${mod}+b`);
+  const seenKeys = await page.evaluate(() => {
+    window.removeEventListener("keydown", window.__keysListener);
+    return window.__keysSeen;
+  });
+  check("⌘S is left for the menu; ⌘B is the editor's", prevented && seenKeys.s === false && seenKeys.b === true, JSON.stringify(seenKeys));
+
   // ---------- Smart typing ----------
   await load("**bold**\n", 6);
   await page.keyboard.type(" "); await settle();
