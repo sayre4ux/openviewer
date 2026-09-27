@@ -9,6 +9,7 @@ import { createOutline } from "./app/outline";
 import { localImageCandidate, resolveClose, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
 import { isInsertableImage, pastedImageName } from "./app/imageNames";
+import { mathCutoff } from "./editor/blocks";
 import { codeHighlight } from "./editor/codeHighlight";
 import { headingSlugs, scrollToAnchor } from "./editor/anchors";
 import { findCommands, findExtension } from "./editor/find";
@@ -18,8 +19,10 @@ import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { smartTyping, smartTypingKeymap } from "./editor/smartTyping";
 import { focusMode } from "./editor/focusMode";
 import { imageUrlAllowed, livePreview, refreshImageResolver, setImageResolver, setRemoteImages } from "./editor/livePreview";
+import { mathSyntax } from "./editor/math";
 import { formatInCell, insertTable, setCellKeys, tableRenderStats } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
+import { katexOutput, loadMath, mathStats, renderMath } from "./render/math";
 import sample from "./sample.md?raw";
 import { createKeybindingStore } from "./shared/keybindings";
 import { commandDefs, effectiveKeys, type Overrides, toCodeMirror } from "./shared/keys";
@@ -79,7 +82,7 @@ function extensionsForDocument(): Extension[] {
   return [
     history(),
     EditorView.lineWrapping,
-    markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: false }),
+    markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: false, extensions: [mathSyntax] }),
     codeHighlight,
     preview.of(modes.source ? [] : livePreview),
     focusComp.of(modes.focus ? focusMode : []),
@@ -354,6 +357,22 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
       embedBudget: 3 * 62,
       fonts: withFonts ? await loadFonts() : undefined,
     });
+  },
+  // Renders one formula as the editor would; `katexCalls` counts calls into KaTeX for this one.
+  math: async (tex: string, kind: "inline" | "display" = "inline") => {
+    await loadMath();
+    const before = mathStats().katexCalls;
+    const started = performance.now();
+    const result = renderMath(tex, kind);
+    return { ...result, ms: performance.now() - started, katexCalls: mathStats().katexCalls - before };
+  },
+  mathCutoff: () => mathCutoff(view.state),
+  scrollTo: (pos: number) => EditorView.scrollIntoView(pos, { y: "center" }),
+  // KaTeX's own output next to the sanitized one, for the sanitizer fidelity check.
+  mathFidelity: async (tex: string, kind: "inline" | "display" = "inline") => {
+    await loadMath();
+    const result = renderMath(tex, kind);
+    return { raw: katexOutput(tex, kind), sanitized: result.ok ? result.html : null };
   },
   snapshot: () => doc.snapshot(),
   saved: (next: Text) => doc.saved(next),

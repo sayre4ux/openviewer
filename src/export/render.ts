@@ -2,12 +2,18 @@ import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { highlightCode, tagHighlighter, tags as t } from "@lezer/highlight";
 import DOMPurify from "dompurify";
-import { Marked } from "marked";
+import katexCss from "katex/dist/katex.min.css?raw";
+import { Marked, type TokenizerAndRendererExtension, type Tokens } from "marked";
+import { inlineMathClose, inlineMathOpens, isDisplayFence, startsBlock } from "../editor/math";
+import { loads } from "../render/loads";
+import { loadMath, MAX_FORMULAS, type MathKind, mathReady, renderMath } from "../render/math";
 import exportCss from "./export.css?raw";
 
 // Export: the document as one standalone HTML page. Markdown is rendered with marked and sanitized
 // with DOMPurify; only then are our own changes made (highlighted code, embedded images), so nothing
 // from the document reaches the page unsanitized. The page carries its own CSP: no scripts at all.
+// Formulas are rendered (and sanitized) first and placed in marked's output, so the page sanitizer
+// sees them too.
 
 export type ExportOptions = {
   // File name without extension, used when the document has no heading.
@@ -22,7 +28,75 @@ export type ExportOptions = {
   embedBudget?: number;
 };
 
-const marked = new Marked({ gfm: true, breaks: false, async: false });
+// Math for marked, with the editor's own scanners (src/editor/math.ts). One set per export: it counts
+// formulas against the document budget and notes whether KaTeX's stylesheet is needed.
+type MathToken = Tokens.Generic & { tex: string };
+function mathExtensions(state: { formulas: number; used: boolean }): TokenizerAndRendererExtension[] {
+  const html = (tex: string, kind: MathKind) => {
+    const source = kind === "display" ? `$$\n${tex}\n$$` : `$${tex}$`;
+    const result = state.formulas < MAX_FORMULAS ? renderMath(tex, kind) : null;
+    state.formulas++;
+    if (!result?.ok) {
+      return kind === "display"
+        ? `<pre class="ov-math-error"><code>${escapeHtml(source)}</code></pre>\n`
+        : `<code class="ov-math-error">${escapeHtml(source)}</code>`;
+    }
+    state.used = true;
+    return kind === "display" ? `<div class="ov-math-display">${result.html}</div>\n` : `<span class="ov-math">${result.html}</span>`;
+  };
+  // Failed searches per inline run, measured from the end of the text (see inlineMathClose).
+  const noClose = new WeakMap<object, { fromLen: number; stopLen: number }>();
+  return [
+    {
+      name: "displayMath",
+      level: "block",
+      start: (src) => {
+        const m = /(?:^|\n) {0,3}\$\$[ \t]*(?:\n|$)/.exec(src);
+        return m ? m.index + (m[0].startsWith("\n") ? 1 : 0) : undefined;
+      },
+      tokenizer(src) {
+        const first = src.indexOf("\n");
+        if (first < 0 || !isDisplayFence(src.slice(0, first))) return undefined;
+        const body: string[] = [];
+        for (let at = first + 1; at < src.length;) {
+          const end = src.indexOf("\n", at) < 0 ? src.length : src.indexOf("\n", at);
+          const line = src.slice(at, end);
+          if (isDisplayFence(line)) {
+            return { type: "displayMath", raw: src.slice(0, Math.min(end + 1, src.length)), tex: body.join("\n") } as MathToken;
+          }
+          if (line.trim() === "" || startsBlock(line)) return undefined;
+          body.push(line);
+          at = end + 1;
+        }
+        return undefined;
+      },
+      renderer: (token) => html((token as MathToken).tex, "display"),
+    },
+    {
+      name: "inlineMath",
+      level: "inline",
+      start: (src) => {
+        const i = src.indexOf("$");
+        return i < 0 ? undefined : i;
+      },
+      tokenizer(src, tokens) {
+        // The character before, which marked has already consumed: `$$x$` is not a formula, `\$$x$` is.
+        const prev = tokens.at(-1);
+        if (prev && prev.type !== "escape" && prev.raw.endsWith("$")) return undefined;
+        if (!inlineMathOpens(src, 0)) return undefined;
+        const known = noClose.get(tokens);
+        if (known && src.length < known.fromLen && src.length > known.stopLen) return undefined;
+        const { close, stop } = inlineMathClose(src, 0);
+        if (close < 0) {
+          noClose.set(tokens, { fromLen: src.length, stopLen: src.length - stop });
+          return undefined;
+        }
+        return { type: "inlineMath", raw: src.slice(0, close + 1), tex: src.slice(1, close) } as MathToken;
+      },
+      renderer: (token) => html((token as MathToken).tex, "inline"),
+    },
+  ];
+}
 
 // Code token classes, the same palette as the editor's code card (codeHighlight.ts).
 const highlighter = tagHighlighter([
@@ -71,9 +145,6 @@ function isLocal(src: string) {
 const FORBID_TAGS = ["style", "form", "button", "textarea", "select", "video", "audio", "source", "track",
   "picture", "object", "embed", "image", "feImage", "use", "link", "meta", "base", "mglyph", "maction"];
 const FORBID_ATTR = ["srcset", "poster", "background", "lowsrc", "dynsrc", "ping", "action", "formaction", "xlink:href", "cite", "longdesc"];
-// A value that could name a resource in CSS or SVG: url(), image(), image-set(), cross-fade(),
-// element(), @import, or any backslash escape that could spell one of those.
-const loads = /url\s*\(|image\s*\(|image-set|cross-fade|element\s*\(|@import|expression\s*\(|\\/i;
 
 // Budget for embedded image bytes, so a document that repeats a large image can't exhaust memory.
 const EMBED_BUDGET = 200 * 1024 * 1024;
@@ -125,6 +196,11 @@ const pageCsp = (remote: boolean) =>
   `default-src 'none'; img-src data:${remote ? " https: http:" : ""}; style-src 'unsafe-inline'; font-src data:`;
 
 export async function renderExport(markdown: string, options: ExportOptions): Promise<string> {
+  const math = { formulas: 0, used: false };
+  // Without KaTeX (it failed to load), formulas export as the text they are.
+  if (markdown.includes("$")) await loadMath().catch(() => undefined);
+  const marked = new Marked({ gfm: true, breaks: false, async: false });
+  if (mathReady()) marked.use({ extensions: mathExtensions(math) });
   const html = marked.parse(markdown) as string;
   const purify = DOMPurify();
   // Inline styles stay (colors, alignment) unless they could load something.
@@ -135,7 +211,8 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
     else if (data.attrName === "href" && tag !== "a") data.keepAttr = false;
     else if (data.attrName !== "src" && data.attrName !== "href" && loads.test(data.attrValue)) data.keepAttr = false;
   });
-  const body = purify.sanitize(html, { RETURN_DOM_FRAGMENT: true, FORBID_TAGS, FORBID_ATTR });
+  // <semantics> and <annotation> hold a formula's MathML; without them its TeX would be loose text.
+  const body = purify.sanitize(html, { RETURN_DOM_FRAGMENT: true, FORBID_TAGS, FORBID_ATTR, ADD_TAGS: ["semantics", "annotation"] });
   // Only disabled task-list checkboxes survive as inputs.
   for (const input of body.querySelectorAll("input")) {
     if (input.type !== "checkbox") input.remove();
@@ -147,7 +224,7 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
   const budget = { left: options.embedBudget ?? EMBED_BUDGET };
   for (const img of Array.from(body.querySelectorAll("img"))) await embed(img, options, cache, budget);
   const remote = Array.from(body.querySelectorAll("img")).some((img) => /^https?:/i.test(img.getAttribute("src") ?? ""));
-  const title = body.querySelector("h1")?.textContent?.trim() || options.name || "Untitled";
+  const title = headingText(body.querySelector("h1")) || options.name || "Untitled";
   const holder = document.createElement("div");
   holder.append(body);
   return `<!doctype html>
@@ -159,6 +236,7 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
 <meta name="generator" content="OpenViewer">
 <title>${escapeHtml(title)}</title>
 <style>${fontFaces(options.fonts)}
+${math.used ? await katexStyles() : ""}
 ${exportCss}</style>
 </head>
 <body>
@@ -168,6 +246,43 @@ ${holder.innerHTML}
 </body>
 </html>
 `;
+}
+
+// A heading's text; a formula counts once (its MathML copy is left out).
+function headingText(h1: Element | null) {
+  if (!h1) return "";
+  const copy = h1.cloneNode(true) as Element;
+  for (const el of copy.querySelectorAll(".katex-mathml")) el.remove();
+  return copy.textContent?.trim() ?? "";
+}
+
+// KaTeX's own fonts, from a fixed list of its files (never from the document).
+const KATEX_FONTS = import.meta.glob("/node_modules/katex/dist/fonts/KaTeX_*.woff2", { query: "?url", import: "default", eager: true }) as Record<string, string>;
+
+// KaTeX's stylesheet with each @font-face pointing at one woff2 data: URL.
+// DECISION: all 20 faces (about 350 KB as base64), not only the ones a page uses: which faces a formula needs
+// depends on KaTeX internals, and a missing one would print in a fallback font.
+async function katexStyles(): Promise<string> {
+  const faces = new Map<string, string>();
+  await Promise.all(Object.entries(KATEX_FONTS).map(async ([path, url]) => {
+    // The build inlines the smallest fonts as data: URLs already; the page's CSP wouldn't let us
+    // fetch one (connect-src has no data:), and there's no need to.
+    let data = /^data:font\/woff2;base64,/.test(url) ? url : null;
+    if (!data) {
+      try {
+        const response = await fetch(url);
+        if (response.ok) data = `data:font/woff2;base64,${toBase64(new Uint8Array(await response.arrayBuffer()))}`;
+      } catch {
+        // A face that can't be read is left out; its glyphs fall back to another font.
+      }
+    }
+    if (data) faces.set(path.slice(path.lastIndexOf("/") + 1), data);
+  }));
+  return katexCss.replace(/@font-face\s*\{[^}]*\}/g, (face) => {
+    const file = /url\(["']?fonts\/(KaTeX_[A-Za-z0-9-]+\.woff2)/.exec(face)?.[1];
+    const data = file ? faces.get(file) : undefined;
+    return data ? face.replace(/src:[^;}]*/, `src:url(${data}) format("woff2")`) : "";
+  });
 }
 
 // PT Serif from the app's own files, as data: URLs.

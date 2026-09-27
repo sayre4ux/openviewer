@@ -47,6 +47,23 @@ const serif = await page.evaluate(() => document.fonts.check("16px 'PT Serif'"))
 const highlighted = await page.evaluate(() => document.querySelectorAll(".cm-md-fence span[class]").length);
 check("editor renders under CSP", serif && highlighted > 0, `PT Serif ${serif}, highlighted spans ${highlighted}`);
 
+// Math: KaTeX, its stylesheet, and its fonts load lazily, as chunks and assets from our own origin.
+await page.evaluate(() => window.__ov.load("Inline $e^{i\\pi}+1=0$ and $\\sqrt{x}$.\n\n$$\n\\int_0^1 \\frac{\\sqrt{x}}{\\mathcal{L}}\\,dx\n$$\n\n"));
+await page.waitForFunction(() => document.querySelectorAll(".cm-md-math .katex, .cm-md-math-block .katex").length === 3, null, { timeout: 10000 }).catch(() => {});
+await page.evaluate(() => document.fonts.ready);
+const math = await page.evaluate(() => ({
+  formulas: document.querySelectorAll(".cm-md-math .katex, .cm-md-math-block .katex").length,
+  font: document.fonts.check("16px KaTeX_Main") && document.fonts.check("italic 16px KaTeX_Math"),
+  styled: getComputedStyle(document.querySelector(".katex") ?? document.body).fontFamily.includes("KaTeX_Main"),
+}));
+check("math renders under CSP, in KaTeX's fonts", math.formulas === 3 && math.font && math.styled, JSON.stringify(math));
+// Export reads KaTeX's fonts (and PT Serif) from the build, under the app's CSP.
+const exported = await page.evaluate(async () => {
+  const html = await window.__ov.renderExport("# Export $x^2$\n\n$$\n\\mathcal{L} = \\frac{1}{2}\n$$\n", true);
+  return { faces: (html.match(/src:url\(data:font\/woff2;base64,/g) ?? []).length, katex: (html.match(/class="katex"/g) ?? []).length };
+});
+check("math export under CSP embeds all 20 KaTeX fonts", exported.faces === 20 && exported.katex === 2, JSON.stringify(exported));
+
 await page.goto(base + "preferences.html");
 await page.waitForSelector(".prefs-row");
 const commandCount = JSON.parse(await readFile("src/shared/commands.json", "utf8")).length;

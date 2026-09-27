@@ -26,6 +26,9 @@ cd src-tauri && cargo test
 | `src/main.ts` | Editor setup: extensions, view modes, the shortcut keymap, the browser test hook |
 | `src/editor/livePreview.ts` | Typora-style rendering: decorations that hide or style Markdown |
 | `src/editor/tables.ts` | Editable table widget, local structural edits, Tidy |
+| `src/editor/math.ts` | Math syntax (`$…$`, `$$` blocks) for the parser, and the scanners export shares |
+| `src/editor/blocks.ts` | Block widgets from a `StateField`: display math |
+| `src/render/` | Renderers behind one function each: `math.ts` (KaTeX) |
 | `src/editor/*.ts` | Keymap, code highlighting, language picker, focus and typewriter modes |
 | `src/app/*.ts` | Document load and save, the Tauri shell (menus, windows, close prompt), outline, word count |
 | `src/prefs/` + `preferences.html` | The Settings window (Shortcuts tab) |
@@ -42,8 +45,8 @@ cd src-tauri && cargo test
    the bytes it is about. Save with `state.sliceDoc()`, not `doc.toString()`: the latter always
    joins lines with `\n` and would turn CRLF files into LF. New line breaks use `state.lineBreak`.
    `write_document` is atomic (temp file, fsync, rename) and keeps permissions and the BOM.
-2. **Rendering is decoration only.** `livePreview.ts` and `tables.ts` add decorations and widgets;
-   they never change the text except when the user edits.
+2. **Rendering is decoration only.** `livePreview.ts`, `tables.ts`, and `blocks.ts` add decorations
+   and widgets; they never change the text except when the user edits.
 3. **One command list.** A new menu or formatting command goes in `src/shared/commands.json`, and
    the menu, the editor keymap, table cells, and Settings all pick it up. Shortcuts use the
    canonical form `Cmd+Ctrl+Alt+Shift+Key` (modifiers in that order); `canonical()` exists on both
@@ -57,6 +60,20 @@ cd src-tauri && cargo test
 6. **Security.** A Markdown file is untrusted input.
    - Never put document text into `innerHTML` without escaping (see `renderInline` in `tables.ts`).
      Keep the CSP in `tauri.conf.json` strict; `scripts/check-csp.mjs` must pass.
+   - No inline `<style>` or `<script>` in any HTML asset (`index.html`, `preferences.html`, `public/`).
+     Tauri would add a hash to that directive, browsers then ignore `'unsafe-inline'`, and KaTeX's
+     inline styles would break in the app while `check-csp.mjs` (which reads the unmodified policy)
+     still passed.
+   - Math (`src/render/math.ts`) is KaTeX on the main thread with `trust: false` (no `\href`, `\url`,
+     `\includegraphics`, `\html*`), `maxExpand` 1000, `maxSize` 20, and a fresh `macros` object per
+     formula, so a `\gdef` never reaches another formula. Sources over 2,000 (inline) or 10,000
+     (display) UTF-16 units are refused before KaTeX sees them, output over 512 KiB is refused, and a
+     document renders at most 2,000 formulas. The output goes through its own DOMPurify instance
+     (`semantics` and `annotation` added; links, images, ids, and resource-naming values removed) and
+     is inserted as nodes, never re-parsed; errors use `textContent`. `check-math.mjs` compares 30
+     formulas node for node with KaTeX's own output, so an upgrade that drops markup fails. Math in
+     table cells stays source (their `renderInline` feeds `innerHTML`). A KaTeX denial-of-service bug
+     would freeze the window: the version is pinned exactly, so upgrade promptly.
    - File access is by user choice only: `read_document`, `write_document`, and
      `create_document_window` accept only paths authorized in Rust by the Open or Save As dialog
      (`open_dialog` / `save_dialog`), a drop, or Finder's Open With. Paths are compared canonically,
@@ -90,7 +107,10 @@ cd src-tauri && cargo test
    - Export (`export.rs`, `src/export/`): Markdown is rendered with marked, sanitized with DOMPurify,
      and only then changed by us (highlighting, embedded images). The page has its own CSP with no
      scripts; tags, attributes, and inline styles that could load a resource are removed, so only
-     `<img src>` (checked with `imageUrlAllowed`, local ones embedded within a 200 MB budget) loads. Rust writes only to a target picked in `export_dialog`, once. PDFs are printed by an
+     `<img src>` (checked with `imageUrlAllowed`, local ones embedded within a 200 MB budget) loads.
+     Formulas are rendered first and placed in marked's output, so the page sanitizer (with
+     `semantics` and `annotation` added) sees them too; KaTeX's woff2 fonts are embedded as `data:`
+     URLs from a fixed list of its files, and the page CSP doesn't change. Rust writes only to a target picked in `export_dialog`, once. PDFs are printed by an
      offscreen WKWebView outside the app (JavaScript off, non-persistent store, no IPC) into a private
      temporary folder, then saved like a document. `OPENVIEWER_PDF_SELFTEST=in.html:out.pdf` (debug
      builds only) prints a page and quits.

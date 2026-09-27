@@ -139,6 +139,22 @@ pre .g, pre .f { color: #8fb8f0; }
 pre .c { color: #6f7680; font-style: italic; }
 pre .y { color: #e6c07b; }
 
+/* Math: KaTeX's HTML and MathML, pre-rendered. A formula that failed is its source. */
+.katex { font-size: 1.1em; }
+.ov-math-display {
+  margin: 0 0 1.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  break-inside: avoid;
+}
+.ov-math-display .katex-display { margin: 0; }
+pre.ov-math-error {
+  background: var(--code-bg);
+  color: var(--muted);
+  border-color: var(--rule);
+}
+
 @media print {
   body { background: #fff; }
   .ov-export { max-width: none; padding: 0; }

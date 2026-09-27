@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import { type EditorState, type Range, type SelectionRange, StateEffect, StateField } from "@codemirror/state";
+import type { EditorState, Range } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -9,8 +9,12 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { mathFragment, mathReady, renderMath } from "../render/math";
 import { scrollToAnchor } from "./anchors";
+import { blockPreview, isRenderedBlock, mathCutoff, renderRefreshed } from "./blocks";
 import { CodeLanguageWidget } from "./codeLanguage";
+import { inlineMathSource } from "./math";
+import { freezeDuringDrag, frozenSelection, lineTouched, touches } from "./reveal";
 import { tables } from "./tables";
 
 // Typora-style live rendering over plain Markdown text. The document is never rewritten;
@@ -101,6 +105,43 @@ class ImageWidget extends WidgetType {
       show(resolved);
     }
     return slot;
+  }
+}
+
+// An inline formula. A click puts the caret inside it, which shows its source.
+class MathWidget extends WidgetType {
+  constructor(readonly tex: string) {
+    super();
+  }
+  eq(other: MathWidget) {
+    return other.tex === this.tex;
+  }
+  toDOM(view: EditorView) {
+    const el = document.createElement("span");
+    el.className = "cm-md-math";
+    const result = renderMath(this.tex, "inline");
+    if (result.ok) {
+      el.appendChild(mathFragment(result));
+    } else {
+      el.classList.add("is-error");
+      const source = document.createElement("span");
+      source.className = "cm-md-math-source";
+      source.textContent = `$${this.tex}$`;
+      const note = document.createElement("span");
+      note.className = "cm-md-render-note";
+      note.textContent = result.message;
+      el.append(source, note);
+    }
+    el.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(el) + 1 } });
+      view.focus();
+    });
+    return el;
+  }
+  ignoreEvent() {
+    return true;
   }
 }
 
@@ -278,52 +319,6 @@ function isPrivateV6(host: string): boolean {
   return false;
 }
 
-// While the mouse button is down, syntax stays shown or hidden as it was when the press started, so
-// the text doesn't reflow under a drag. It settles once, on release.
-const setFrozenSelection = StateEffect.define<readonly SelectionRange[] | null>();
-const frozenSelection = StateField.define<readonly SelectionRange[] | null>({
-  create: () => null,
-  update(value, tr) {
-    for (const e of tr.effects) if (e.is(setFrozenSelection)) return e.value;
-    return value && tr.docChanged ? value.map((r) => r.map(tr.changes)) : value;
-  },
-});
-
-const freezeDuringDrag = EditorView.domEventHandlers({
-  mousedown(e, view) {
-    if (e.button !== 0 || view.state.field(frozenSelection)) return false;
-    view.dispatch({ effects: setFrozenSelection.of(view.state.selection.ranges) });
-    // Released on the window, so a drag that ends outside the editor still settles. A button released
-    // outside the app window sends no mouseup, so a move with no button held, a key press, or losing
-    // focus also end it.
-    const events: [string, (e: Event) => void][] = [
-      ["mouseup", () => release()],
-      ["pointerup", () => release()],
-      ["pointercancel", () => release()],
-      ["mousemove", (e) => { if (((e as MouseEvent).buttons & 1) === 0) release(); }],
-      ["keydown", () => release()],
-      ["blur", () => release()],
-    ];
-    const release = () => {
-      for (const [type, handler] of events) window.removeEventListener(type, handler, true);
-      if (view.state.field(frozenSelection, false)) view.dispatch({ effects: setFrozenSelection.of(null) });
-    };
-    for (const [type, handler] of events) window.addEventListener(type, handler, true);
-    return false;
-  },
-});
-
-function touches(state: EditorState, from: number, to: number) {
-  const ranges = state.field(frozenSelection, false) ?? state.selection.ranges;
-  for (const r of ranges) if (r.from <= to && r.to >= from) return true;
-  return false;
-}
-
-function lineTouched(state: EditorState, pos: number) {
-  const line = state.doc.lineAt(pos);
-  return touches(state, line.from, line.to);
-}
-
 function listDepth(node: SyntaxNode) {
   let depth = 0;
   for (let n = node.parent; n; n = n.parent) {
@@ -426,6 +421,25 @@ function buildDecorations(view: EditorView): DecorationSet {
         return;
       }
 
+      if (name === "InlineMath") {
+        if (mathReady() && node.from < mathCutoff(state) && !touches(state, node.from, node.to)) {
+          out.push(Decoration.replace({ widget: new MathWidget(inlineMathSource(state, node)) }).range(node.from, node.to));
+        } else {
+          out.push(Decoration.mark({ class: "cm-md-math-src" }).range(node.from, node.to));
+          for (const m of node.getChildren("MathMark")) out.push(revealedMark.range(m.from, m.to));
+        }
+        return false;
+      }
+
+      // Rendered by the block field; while it shows its source, the source is styled here. Inner
+      // quote markers are still visited and hidden like any other.
+      if (name === "DisplayMath") {
+        if (isRenderedBlock(state, node.from)) return false;
+        addLines(state, out, node.from, node.to, () => Decoration.line({ class: "cm-md-math-lines" }));
+        for (const m of node.getChildren("MathMark")) out.push(revealedMark.range(m.from, m.to));
+        return;
+      }
+
       if (name === "URL" && node.parent?.name !== "Link" && node.parent?.name !== "Image") {
         const text = doc.sliceString(node.from, node.to);
         out.push(Decoration.mark({ class: "cm-md-link", attributes: { "data-href": text } }).range(node.from, node.to));
@@ -503,6 +517,7 @@ function buildDecorations(view: EditorView): DecorationSet {
       }
 
       if (name === "FencedCode" || name === "CodeBlock") {
+        if (isRenderedBlock(state, node.from)) return false; // a diagram, drawn by the block field
         const fenced = name === "FencedCode";
         const openMark = fenced ? node.firstChild : null;
         const closed = fenced && node.lastChild?.name === "CodeMark" && node.lastChild.from > openMark!.to;
@@ -568,7 +583,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
     }
     update(u: ViewUpdate) {
       const frozenChanged = u.startState.field(frozenSelection, false) !== u.state.field(frozenSelection, false);
-      if (u.docChanged || u.selectionSet || frozenChanged || u.viewportChanged || syntaxTree(u.startState) !== syntaxTree(u.state)) {
+      if (u.docChanged || u.selectionSet || frozenChanged || u.viewportChanged || syntaxTree(u.startState) !== syntaxTree(u.state) || renderRefreshed(u)) {
         this.decorations = buildDecorations(u.view);
       }
     }
@@ -602,4 +617,4 @@ const linkClick = EditorView.domEventHandlers({
   },
 });
 
-export const livePreview = [frozenSelection, freezeDuringDrag, livePreviewPlugin, linkClick, tables];
+export const livePreview = [frozenSelection, freezeDuringDrag, blockPreview, livePreviewPlugin, linkClick, tables];

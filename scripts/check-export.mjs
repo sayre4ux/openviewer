@@ -89,6 +89,69 @@ check("remote images off: none exported, CSP has no network source",
 check("remote images on: CSP allows them", /img-src data: https: http:;/.test(doc.csp), doc.csp);
 check("title from the first heading", doc.title === "Hostile", doc.title);
 
+// Math: KaTeX's HTML and MathML rendered before the page sanitizer runs; KaTeX's fonts as data: URLs;
+// nothing that runs or loads; the page CSP unchanged.
+const mathMd = [
+  "# Math $e^{i\\pi}+1=0$",
+  "",
+  "Inline $\\frac{a}{b}$, $\\href{javascript:alert(1)}{x}$, $\\htmlId{x}{y}$, $\\includegraphics{http://127.0.0.1/a.png}$, and bad $\\frac{1}{$.",
+  "",
+  "$$",
+  "\\sum_{k=1}^n k = \\frac{n(n+1)}{2} \\qquad \\left( \\int_0^1 \\sqrt{x}\\,dx \\right)",
+  "$$",
+  "",
+  "Prices $5 and $10 stay text, and so does `$x$`.",
+].join("\n");
+const mathHtml = await page.evaluate((md) => window.__ov.renderExport(md, true, false), mathMd);
+const math = await page.evaluate((h) => {
+  const d = new DOMParser().parseFromString(h, "text/html");
+  const css = [...d.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+  return {
+    scripts: d.querySelectorAll("script").length,
+    handlers: [...d.querySelectorAll("*")].some((el) => [...el.attributes].some((a) => a.name.startsWith("on"))),
+    katex: d.querySelectorAll(".katex").length,
+    display: d.querySelectorAll(".ov-math-display .katex-display").length,
+    semantics: d.querySelectorAll("semantics").length,
+    annotations: [...d.querySelectorAll("annotation")].map((a) => a.textContent),
+    looseTex: [...d.querySelectorAll("math")].some((m) => [...m.childNodes].some((n) => n.nodeType === 3 && n.textContent.includes("\\"))),
+    errors: [...d.querySelectorAll(".ov-math-error")].map((e) => e.textContent),
+    links: [...d.querySelectorAll("a, img")].map((a) => a.outerHTML),
+    ids: [...d.body.querySelectorAll("[id]")].length,
+    csp: d.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content") ?? "",
+    title: d.title,
+    faces: (css.match(/@font-face\{[^}]*font-family:"?KaTeX_/g) ?? []).length,
+    dataFaces: (css.match(/src:url\(data:font\/woff2;base64,/g) ?? []).length,
+    otherUrls: (css.match(/url\((?!["']?data:)[^)]*\)/g) ?? []),
+    loads: [...d.body.querySelectorAll("*")].flatMap((el) => [...el.attributes]
+      .filter((a) => /^(src|srcset|href|xlink:href|data)$/i.test(a.name) || /url\s*\(|image\s*\(/i.test(a.value))
+      .map((a) => `${el.tagName.toLowerCase()}[${a.name}]`)),
+    text: d.body.textContent,
+  };
+}, mathHtml);
+check("math exports as KaTeX HTML and MathML, with its TeX in <annotation>",
+  math.katex === 6 && math.display === 1 && math.semantics === 6 && math.annotations.includes("\\frac{a}{b}") && !math.looseTex,
+  JSON.stringify({ katex: math.katex, display: math.display, semantics: math.semantics, annotations: math.annotations, looseTex: math.looseTex }));
+check("math export: no scripts, handlers, links, images, ids, or loads",
+  math.scripts === 0 && !math.handlers && math.links.length === 0 && math.ids === 0 && math.loads.length === 0,
+  JSON.stringify({ links: math.links, ids: math.ids, loads: math.loads }));
+check("a formula that fails exports as its source; prices and code stay text",
+  math.errors.length === 1 && math.errors[0] === "$\\frac{1}{$" && math.text.includes("Prices $5 and $10 stay text") && math.text.includes("$x$"),
+  JSON.stringify(math.errors));
+check("KaTeX fonts embedded as woff2 data: URLs, CSP unchanged",
+  math.faces === 20 && math.dataFaces === 20 && math.otherUrls.length === 0 &&
+  math.csp === "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:" && math.title === "Math e^{i\\pi}+1=0".replace("e^{i\\pi}", "eiπ"),
+  JSON.stringify({ faces: math.faces, dataFaces: math.dataFaces, otherUrls: math.otherUrls.slice(0, 3), csp: math.csp, title: math.title }));
+writeFileSync(`${out}/export-math.html`, mathHtml);
+{
+  const mathView = await browser.newPage({ viewport: { width: 900, height: 700 }, deviceScaleFactor: 2, javaScriptEnabled: false });
+  await mathView.setContent(mathHtml, { waitUntil: "load" });
+  await mathView.evaluate(() => document.fonts.ready);
+  const fonts = await mathView.evaluate(() => ({ main: document.fonts.check("16px KaTeX_Main"), math: document.fonts.check("italic 16px KaTeX_Math"), size: document.fonts.check("16px KaTeX_Size2") }));
+  await mathView.screenshot({ path: `${out}/e3-export-math.png` });
+  check("math renders with JavaScript off, in KaTeX's fonts", fonts.main && fonts.math, JSON.stringify(fonts));
+  await mathView.close();
+}
+
 // The look: the sample document with fonts, as a page and as print (Chrome only has page.pdf()).
 const sample = await page.evaluate(() => window.__ov.source);
 const pretty = await page.evaluate((md) => window.__ov.renderExport(md, true), sample);

@@ -21,6 +21,9 @@ and read in one view, and Markdown syntax disappears once you finish typing it.
 - **Export** to PDF (⇧⌘E) or a single self-contained HTML file, in the same Newsprint look, with
   local images and fonts embedded.
 - **Code blocks** in a dark card with syntax highlighting and a language picker.
+- **Math.** `$…$` inline and `$$` blocks render with KaTeX as you leave them, and show their TeX
+  again when the cursor goes back in. Prices like `$5 and $10` stay text. Export keeps the formulas,
+  with KaTeX's fonts embedded.
 - **Outline sidebar** (⇧⌘L), **focus mode** (F8), **typewriter mode** (F9), and a word count that
   counts Chinese, Japanese, and Korean characters as words.
 - **Custom shortcuts.** Settings (⌘,) lets you record a new shortcut for any menu or formatting
@@ -102,7 +105,7 @@ Before the first release:
 After the first release:
 
 - Dark mode
-- Math and Mermaid diagrams
+- Mermaid diagrams
 - A file tree sidebar
 - A choice of spellcheck language
 - Windows support
@@ -116,4 +119,4 @@ After the first release:
 - The look follows Typora's Newsprint theme. The CSS here is written from scratch.
 - [PT Serif](https://fonts.google.com/specimen/PT+Serif) by ParaType, bundled under the
   [SIL Open Font License](public/fonts/OFL.txt).
-- Built with Tauri, CodeMirror, and Lezer.
+- Built with Tauri, CodeMirror, Lezer, and [KaTeX](https://katex.org), whose fonts are bundled.

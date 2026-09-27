@@ -465,8 +465,10 @@ body {
 #editor .cm-md-table-wrap {
   position: relative;
 }
-/* Tables inside blockquotes and list items: one nested box per container, in source order. */
-#editor .cm-md-table-quote {
+/* Tables (and rendered blocks) inside blockquotes and list items: one nested box per container, in
+   source order. */
+#editor .cm-md-table-quote,
+#editor .cm-md-block-quote {
   margin-left: 2em;
   padding-left: 1em;
   border-left: 5px solid var(--quote-bar);
@@ -475,9 +477,21 @@ body {
   font-style: italic;
   color: var(--muted);
 }
-#editor .cm-md-table-list {
+#editor .cm-md-table-list,
+#editor .cm-md-block-list {
   position: relative;
   margin-left: calc(1.5em + 30px);
+}
+#editor .cm-md-block-marker {
+  position: absolute;
+  left: -30px;
+  top: 0;
+  line-height: var(--line);
+  box-sizing: border-box;
+  width: 30px;
+  padding-right: 0.7em;
+  text-align: right;
+  user-select: none;
 }
 #editor .cm-md-table-marker {
   position: absolute;
@@ -534,6 +548,66 @@ body {
 #editor .cm-md-table-tools button:hover {
   background: var(--code-bg);
   color: var(--ink);
+}
+
+/* ---------- Math (KaTeX): rendered in place; the source shows while the caret is in it ---------- */
+
+/* DECISION: 1.1em rather than KaTeX's 1.21em, which towers over PT Serif at body size. */
+#editor .cm-md-math .katex,
+#editor .cm-md-math-display .katex {
+  font-size: 1.1em;
+}
+#editor .cm-md-math {
+  cursor: text;
+}
+#editor .cm-md-math-src {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+#editor .cm-md-math-lines {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+#editor .cm-md-math-block {
+  position: relative;
+  padding: 0.5em 0;
+  cursor: text;
+}
+#editor .cm-md-math-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+#editor .cm-md-math-display .katex-display {
+  margin: 0;
+}
+/* A formula or diagram that didn't render: its source, and why, in plain text. */
+#editor .cm-md-math.is-error .cm-md-math-source {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  color: var(--muted);
+}
+#editor .cm-md-render-failed {
+  padding: 0.5em 0.75em;
+  background: var(--code-bg);
+}
+#editor .cm-md-render-source {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.875em;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+}
+#editor .cm-md-render-note {
+  margin-left: 0.5em;
+  font: 12px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color: #9a2a1f;
+}
+#editor .cm-md-render-failed .cm-md-render-note {
+  display: block;
+  margin: 0.4em 0 0;
 }
 
 /* ---------- Focus mode (F8) and typewriter mode (F9) ---------- */
