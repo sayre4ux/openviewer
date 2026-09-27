@@ -42,6 +42,19 @@
             </fieldset>
             <p class="prefs-help">An Untitled document is saved first, so the images have somewhere to go.</p>
           </section>
+          <section class="prefs-group">
+            <h2>Images from the internet</h2>
+            <label class="prefs-choice"><input id="remote-images" type="checkbox" />
+              <span><strong class="prefs-plain">Load images from the internet</strong> <span class="prefs-choice-note">off by default</span></span></label>
+            <p class="prefs-help prefs-risk">When this is on, opening a document downloads every web image in it. Whoever runs
+              the server behind an image learns that the document was opened and when, and sees your IP address,
+              which shows roughly where you are. An image can work as a hidden read receipt, even in a document
+              that looks harmless, and its server may recognize you again later through what OpenViewer keeps in
+              its cache. A server can also redirect the request to a device on your own network, such as
+              a router or printer, and OpenViewer can’t fully block that yet.</p>
+            <p class="prefs-help">Turn this on only if you trust the documents you open. When it’s off, a web image shows
+              as a note naming its server, and export leaves it out. Images stored with the document always show.</p>
+          </section>
         </div>
       </main>
     </div>

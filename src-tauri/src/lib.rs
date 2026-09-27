@@ -63,6 +63,9 @@ fn create_document_window<R: Runtime>(app: tauri::AppHandle<R>, path: Option<Str
 
 fn open_window<R: Runtime>(app: &tauri::AppHandle<R>, url: String) -> Result<(), String> {
   let label = format!("document-{}", WINDOW_ID.fetch_add(1, Ordering::Relaxed));
+  // DECISION: document windows keep WebKit's persistent store (not `incognito`): the outline and word
+  // count toggles live in localStorage. WebKit blocks third-party cookies here, but with remote images on
+  // a server could still recognize a reader through the HTTP cache; Preferences says so.
   WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
     .title("OpenViewer").inner_size(1100.0, 760.0).min_inner_size(480.0, 360.0)
     .build().map(|_| ()).map_err(|e| e.to_string())
@@ -275,5 +278,8 @@ mod tests {
       assert!(docs.contains(&serde_json::json!(permission)));
       assert!(!prefs.contains(&serde_json::json!(permission)));
     }
+    // Only Preferences changes settings: a document could otherwise turn remote images on.
+    assert!(prefs.contains(&serde_json::json!("allow-set-settings")));
+    assert!(!docs.contains(&serde_json::json!("allow-set-settings")));
   }
 }

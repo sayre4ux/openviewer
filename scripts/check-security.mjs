@@ -191,15 +191,31 @@ try {
   }, markdown);
   const blockedAlts = rendered.blocked.map((b) => b.alt).sort().join(",");
   check("blocked images are placeholders",
-    blockedAlts === "a,b,c" && rendered.blocked.every((b) => b.note === "image blocked" && b.imgs === 0 && !b.html),
+    blockedAlts === "a,b,c,d" && rendered.blocked.every((b) => b.imgs === 0 && !b.html) &&
+    rendered.blocked.filter((b) => b.alt !== "d").every((b) => b.note === "image blocked"),
     JSON.stringify(rendered.blocked));
-  const byAlt = Object.fromEntries(rendered.imgs.map((img) => [img.alt, img.src]));
-  check("public and relative images load",
-    rendered.imgs.length === 2 && byAlt.d?.includes("https://example.com/x.png") && byAlt.e?.includes("pics/local.png"),
-    JSON.stringify(rendered.imgs));
-  check("no remote private image element",
-    rendered.imgs.every((img) => !/127\.0\.0\.1|192\.168\.1\.2|javascript:/i.test(img.src ?? "")));
+  check("remote images are off by default and name their host",
+    rendered.blocked.find((b) => b.alt === "d")?.note === "image from example.com not loaded" &&
+    rendered.imgs.length === 1 && rendered.imgs[0].src?.includes("pics/local.png"),
+    JSON.stringify(rendered));
   await page.screenshot({ path: `${out}/sec-images.png` });
+
+  // Turned on (Preferences → Images), public web images load; private hosts stay blocked.
+  const remoteOn = await page.evaluate(() => {
+    window.__ov.setRemoteImages(true);
+    const imgs = [...document.querySelectorAll("#editor img.cm-md-image")].map((img) => ({ alt: img.getAttribute("alt"), src: img.getAttribute("src") }));
+    const blocked = [...document.querySelectorAll(".cm-md-image-blocked-alt")].map((el) => el.textContent).sort().join(",");
+    window.__ov.setRemoteImages(false);
+    const after = document.querySelectorAll("#editor img.cm-md-image").length;
+    return { imgs, blocked, after };
+  });
+  const byAlt = Object.fromEntries(remoteOn.imgs.map((img) => [img.alt, img.src]));
+  check("with remote images on, public and relative images load",
+    remoteOn.imgs.length === 2 && byAlt.d?.includes("https://example.com/x.png") && byAlt.e?.includes("pics/local.png") &&
+    remoteOn.blocked === "a,b,c" && remoteOn.after === 1,
+    JSON.stringify(remoteOn));
+  check("no remote private image element",
+    [...rendered.imgs, ...remoteOn.imgs].every((img) => !/127\.0\.0\.1|192\.168\.1\.2|javascript:/i.test(img.src ?? "")));
 
   const huge = await page.evaluate(() => {
     const body = Array.from({ length: 1999 }, () => "| 1 | 2 | 3 |").join("\n");

@@ -73,6 +73,20 @@ check("nothing else in the page can load a resource",
   JSON.stringify(doc.loads));
 check("the embed budget counts every use of an image", doc.bigEmbedded === 3, String(doc.bigEmbedded));
 check("page CSP forbids scripts", doc.csp.startsWith("default-src 'none'") && !doc.csp.includes("script"), doc.csp);
+
+// With remote images off (the default), none is kept and the page can't reach the network at all.
+const offline = await page.evaluate(async (md) => {
+  const d = new DOMParser().parseFromString(await window.__ov.renderExport(md, false, false), "text/html");
+  return {
+    imgs: Array.from(d.querySelectorAll("img")).map((i) => i.getAttribute("src")).filter((s) => !s.startsWith("data:")),
+    missing: Array.from(d.querySelectorAll(".ov-missing-image")).map((s) => s.textContent).join(","),
+    csp: d.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content") ?? "",
+  };
+}, hostile);
+check("remote images off: none exported, CSP has no network source",
+  offline.imgs.length === 0 && offline.missing.startsWith("image,lan,loop,web,") && !/https?:/.test(offline.csp) && /img-src data:;/.test(offline.csp),
+  JSON.stringify(offline));
+check("remote images on: CSP allows them", /img-src data: https: http:;/.test(doc.csp), doc.csp);
 check("title from the first heading", doc.title === "Hostile", doc.title);
 
 // The look: the sample document with fonts, as a page and as print (Chrome only has page.pdf()).

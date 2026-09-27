@@ -14,7 +14,7 @@ export type ExportOptions = {
   name: string;
   // Local image sources (as written) → a data: URL, or null when the image can't be shown.
   embedImage: (source: string) => Promise<string | null>;
-  // Remote image policy, shared with the editor (no loopback or private hosts).
+  // Remote image policy: the user's setting plus the editor's host rules (no loopback or private hosts).
   remoteAllowed: (source: string) => boolean;
   // PT Serif as data: URLs, so the page looks right anywhere. Omitted in tests.
   fonts?: { regular: string; italic: string; bold: string; boldItalic: string };
@@ -119,8 +119,10 @@ function fontFaces(fonts: ExportOptions["fonts"]) {
   return face(fonts.regular, "normal", 400) + face(fonts.italic, "italic", 400) + face(fonts.bold, "normal", 700) + face(fonts.boldItalic, "italic", 700);
 }
 
-// The page's own policy: images and fonts inline or remote images, no scripts, no other requests.
-const PAGE_CSP = "default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:";
+// The page's own policy: images and fonts inline, no scripts, no other requests. Remote images are
+// allowed only when one was kept (the user turned them on), so the page otherwise can't reach the network.
+const pageCsp = (remote: boolean) =>
+  `default-src 'none'; img-src data:${remote ? " https: http:" : ""}; style-src 'unsafe-inline'; font-src data:`;
 
 export async function renderExport(markdown: string, options: ExportOptions): Promise<string> {
   const html = marked.parse(markdown) as string;
@@ -144,6 +146,7 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
   const cache = new Map<string, string | null>();
   const budget = { left: options.embedBudget ?? EMBED_BUDGET };
   for (const img of Array.from(body.querySelectorAll("img"))) await embed(img, options, cache, budget);
+  const remote = Array.from(body.querySelectorAll("img")).some((img) => /^https?:/i.test(img.getAttribute("src") ?? ""));
   const title = body.querySelector("h1")?.textContent?.trim() || options.name || "Untitled";
   const holder = document.createElement("div");
   holder.append(body);
@@ -152,7 +155,7 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="${PAGE_CSP}">
+<meta http-equiv="Content-Security-Policy" content="${pageCsp(remote)}">
 <meta name="generator" content="OpenViewer">
 <title>${escapeHtml(title)}</title>
 <style>${fontFaces(options.fonts)}

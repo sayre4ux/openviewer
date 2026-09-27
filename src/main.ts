@@ -12,7 +12,7 @@ import { isInsertableImage, pastedImageName } from "./app/imageNames";
 import { codeHighlight } from "./editor/codeHighlight";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
 import { focusMode } from "./editor/focusMode";
-import { imageUrlAllowed, livePreview, refreshImageResolver, setImageResolver } from "./editor/livePreview";
+import { imageUrlAllowed, livePreview, refreshImageResolver, setImageResolver, setRemoteImages } from "./editor/livePreview";
 import { formatInCell, insertTable, setCellKeys, tableRenderStats } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import sample from "./sample.md?raw";
@@ -256,6 +256,8 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   modes,
   lineEndings,
   imageUrlAllowed,
+  // The app reads this from settings.json; off by default, as there.
+  setRemoteImages: (on: boolean) => setRemoteImages(view, on),
   localImageCandidate,
   pastedImageName,
   insertImages: (markdown: string, at?: number) => doc.insertImages(markdown, at),
@@ -268,10 +270,10 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
     refreshImageResolver(view);
   },
   // Renders an export page; local images come back as their alt text (there's no Rust here).
-  renderExport: async (markdown: string, withFonts = false) => {
+  renderExport: async (markdown: string, withFonts = false, remote = true) => {
     const { renderExport, loadFonts } = await import("./export/render");
     return renderExport(markdown, {
-      name: "Test", remoteAllowed: imageUrlAllowed,
+      name: "Test", remoteAllowed: remote ? imageUrlAllowed : () => false,
       // "assets/big.png" stands in for a local image Rust would embed; the budget fits three copies.
       embedImage: async (src) => (src === "assets/big.png" ? `data:image/png;base64,${"A".repeat(40)}` : null),
       embedBudget: 3 * 62,

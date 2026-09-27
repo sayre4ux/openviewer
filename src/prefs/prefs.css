@@ -270,6 +270,12 @@ kbd {
   font-size: 13px;
   font-weight: 600;
 }
+.prefs-choice strong.prefs-plain {
+  font: 600 14px var(--sans);
+}
+.prefs-risk {
+  margin-top: 10px;
+}
 .prefs-choice-note {
   margin-left: 6px;
   color: var(--muted);

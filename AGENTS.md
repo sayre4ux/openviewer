@@ -77,9 +77,13 @@ cd src-tauri && cargo test
    - Windows can't emit events (`core:event:allow-emit` is not granted), so one window can't send
      `menu` commands to another. Quit is broadcast by Rust. `allow-destroy` stays: Tauri's
      `onCloseRequested` calls `destroy()` after our unsaved-changes prompt.
-   - Known gap: a remote image is checked by host name only. A public URL that redirects, or a name
-     that resolves, to a LAN address still loads. Closing it means fetching remote images in Rust;
-     that waits on the remote-images policy decision.
+   - Remote images are off by default (`remoteImages` in `settings.json`, set only from the
+     Preferences window). Off, the editor shows a placeholder naming the host, and export drops them
+     and leaves `https:`/`http:` out of the page's CSP. The app's own CSP still allows `https:` images
+     (a CSP can't follow a runtime setting), so the check in `buildDecorations` is the only guard:
+     any new way of creating an `<img>` must go through it. Known gap once turned on: a remote image is
+     checked by host name only, so a public URL that redirects, or a name that resolves, to a LAN
+     address still loads. Closing it means fetching remote images in Rust.
    - Text files are decoded in Rust (`documents::decode`); NUL bytes without a BOM mean binary and
      are refused. A save that the file's encoding can't hold fails with `unmappable:` rather than
      writing replacement characters.

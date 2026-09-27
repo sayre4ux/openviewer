@@ -17,6 +17,10 @@ pub const IMAGE_FOLDERS: &[&str] = &["assets", "{name}.assets", "."];
 pub struct Settings {
   #[serde(default = "default_image_folder")]
   pub image_folder: String,
+  // Images from the internet. Off unless the user turns it on in Preferences: loading one tells its
+  // server who opened the document, from where, and when.
+  #[serde(default)]
+  pub remote_images: bool,
 }
 
 fn default_image_folder() -> String {
@@ -25,7 +29,7 @@ fn default_image_folder() -> String {
 
 impl Default for Settings {
   fn default() -> Self {
-    Settings { image_folder: default_image_folder() }
+    Settings { image_folder: default_image_folder(), remote_images: false }
   }
 }
 
@@ -87,5 +91,15 @@ mod tests {
     assert_eq!(s.sanitized().image_folder, "{name}.assets");
     let s: Settings = serde_json::from_str("{}").unwrap();
     assert_eq!(s.image_folder, "assets");
+  }
+
+  #[test]
+  fn remote_images_default_off() {
+    assert!(!Settings::default().remote_images);
+    let s: Settings = serde_json::from_str(r#"{"imageFolder":"."}"#).unwrap();
+    assert!(!s.remote_images);
+    let s: Settings = serde_json::from_str(r#"{"remoteImages":true}"#).unwrap();
+    assert!(s.sanitized().remote_images);
+    assert!(serde_json::from_str::<Settings>(r#"{"remoteImages":"yes"}"#).is_err());
   }
 }

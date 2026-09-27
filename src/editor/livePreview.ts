@@ -104,14 +104,14 @@ class ImageWidget extends WidgetType {
 }
 
 class BlockedImageWidget extends WidgetType {
-  constructor(readonly alt: string) {
+  constructor(readonly alt: string, readonly note = "image blocked") {
     super();
   }
   eq(other: BlockedImageWidget) {
-    return other.alt === this.alt;
+    return other.alt === this.alt && other.note === this.note;
   }
   toDOM() {
-    return blockedImageNode(this.alt);
+    return blockedImageNode(this.alt, undefined, this.note);
   }
 }
 
@@ -122,7 +122,7 @@ export interface BlockedImage {
 }
 type ResolvedImage = string | null | BlockedImage;
 
-function blockedImageNode(altText: string, offer?: BlockedImage) {
+function blockedImageNode(altText: string, offer?: BlockedImage, noteText = "image blocked") {
   const el = document.createElement("span");
   el.className = "cm-md-image-blocked";
   if (altText) {
@@ -133,7 +133,7 @@ function blockedImageNode(altText: string, offer?: BlockedImage) {
   }
   const note = document.createElement("span");
   note.className = "cm-md-image-blocked-note";
-  note.textContent = "image blocked";
+  note.textContent = noteText;
   el.appendChild(note);
   if (offer) {
     const button = document.createElement("button");
@@ -147,6 +147,29 @@ function blockedImageNode(altText: string, offer?: BlockedImage) {
     el.appendChild(button);
   }
   return el;
+}
+
+// Images from the internet load only after the user turns them on in Preferences → Images: each
+// one tells its server that this document was opened, by whom (IP address), and when.
+let remoteImages = false;
+export function setRemoteImages(view: EditorView | null, on: boolean) {
+  if (remoteImages === on) return;
+  remoteImages = on;
+  if (view) refreshImageResolver(view);
+}
+export function remoteImagesAllowed() {
+  return remoteImages;
+}
+export function isRemoteImage(raw: string) {
+  return /^https?:\/\//i.test(raw.trim());
+}
+// The placeholder names the host, so the reader can judge whether to turn remote images on.
+function remoteNote(raw: string) {
+  try {
+    return `image from ${new URL(raw.trim()).hostname} not loaded`;
+  } catch {
+    return "remote image not loaded";
+  }
 }
 
 // https, http (except loopback, private, and link-local hosts), data:image, or a file path.
@@ -380,7 +403,9 @@ function buildDecorations(view: EditorView): DecorationSet {
         const alt = marks.length >= 2 ? doc.sliceString(marks[0].to, marks[1].from) : "";
         if (url) {
           const raw = doc.sliceString(url.from, url.to);
-          const widget = imageUrlAllowed(raw) ? new ImageWidget(raw, alt, imageResolverVersion) : new BlockedImageWidget(alt);
+          const widget = !imageUrlAllowed(raw) ? new BlockedImageWidget(alt)
+            : isRemoteImage(raw) && !remoteImages ? new BlockedImageWidget(alt, remoteNote(raw))
+            : new ImageWidget(raw, alt, imageResolverVersion);
           out.push(Decoration.replace({ widget }).range(node.from, node.to));
         }
         return false;

@@ -1,5 +1,5 @@
 import type { Text } from "@codemirror/state";
-import { imageUrlAllowed, setImageResolver } from "../editor/livePreview";
+import { imageUrlAllowed, isRemoteImage, remoteImagesAllowed, setImageResolver, setRemoteImages } from "../editor/livePreview";
 import { lineEndings } from "./document";
 import { pastedImageName } from "./imageNames";
 
@@ -242,6 +242,18 @@ export async function startShell(
     () => save(),
   );
 
+  // Remote images stay off until the setting says otherwise; read before the first load so a document
+  // never shows them for a moment when they're off.
+  const applySettings = (s: { remoteImages?: boolean }) => {
+    setRemoteImages(null, s.remoteImages === true);
+    doc.refreshImages();
+  };
+  const { listen } = await import("@tauri-apps/api/event");
+  // Listening before the first load: a startup sheet (encoding, line endings) must not hide a change.
+  // Broadcast by Rust when Preferences changes a setting.
+  await listen<{ remoteImages?: boolean }>("settings-changed", ({ payload }) => applySettings(payload));
+  await call<{ remoteImages?: boolean }>("get_settings").then(applySettings).catch(() => {});
+
   // Set before the first load so images in the startup document resolve on first render.
   setImageResolver((src) => {
     if (/^(https?:|data:)/i.test(src)) return src;
@@ -281,7 +293,7 @@ export async function startShell(
       const documentPath = path;
       const html = await renderExport(doc.getText(), {
         name,
-        remoteAllowed: imageUrlAllowed,
+        remoteAllowed: (src) => remoteImagesAllowed() && isRemoteImage(src) && imageUrlAllowed(src),
         fonts: await loadFonts(),
         embedImage: async (src) => {
           const candidate = documentPath && localImageCandidate(src, documentPath);
@@ -304,7 +316,6 @@ export async function startShell(
 
   const startupPath = new URLSearchParams(location.search).get("path");
   if (startupPath) await openIntoCurrent(startupPath);
-  const { listen } = await import("@tauri-apps/api/event");
   // Menu and open-path events are targeted at this window only (Rust uses emit_to).
   await win.listen<string>("menu", async ({ payload: id }) => {
     switch (id) {

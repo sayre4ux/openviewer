@@ -132,6 +132,18 @@ await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
 check("image folder choice kept", await page.isChecked('input[name="image-folder"][value="{name}.assets"]'),
   await page.evaluate(() => localStorage.getItem("openviewer.settings")));
 
+// Images from the internet: off by default, and turning them on keeps the folder choice.
+await page.click('.prefs-tab[data-pane="images"]'); await settle();
+check("remote images default off", !(await page.isChecked("#remote-images")));
+check("remote images warning explains the risk",
+  /IP address/.test(await page.textContent("#pane-images")) && /read receipt/.test(await page.textContent("#pane-images")));
+await page.click("#remote-images"); await settle();
+await page.screenshot({ path: `${out}/p5-remote-images.png`, fullPage: true });
+await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+const savedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem("openviewer.settings") ?? "{}"));
+check("remote images choice kept with the folder", savedSettings.remoteImages === true && savedSettings.imageFolder === "{name}.assets",
+  JSON.stringify(savedSettings));
+
 // Undo rebound onto a key cells use for navigation still undoes in a cell.
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ undo: "Cmd+Left" })));
 await page.setViewportSize({ width: 1100, height: 700 });
