@@ -5,7 +5,8 @@
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 
-// Cargo ignores RUSTFLAGS once the encoded form is set, so any flags the builder already has come along.
+// Cargo ignores RUSTFLAGS once the encoded form is set, so flags from either variable come along.
+// `build.rustflags` in a Cargo config would be overridden; this repository has none.
 const existing = process.env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f")
   ?? process.env.RUSTFLAGS?.trim().split(/\s+/)
   ?? [];
@@ -15,4 +16,5 @@ const result = spawnSync("npx", ["tauri", "build", "--bundles", "app", ...proces
   shell: process.platform === "win32",
   env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") },
 });
+if (result.error) console.error(`Couldn't run tauri build: ${result.error.message}`);
 process.exit(result.status ?? 1);

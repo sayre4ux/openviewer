@@ -36,3 +36,7 @@ objc2-app-kit = { version = "0.3", features = ["NSPrintOperation", "NSPrintInfo"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+# Mock runtime for tests that drive app-level functions (window creation, state).
+tauri = { version = "2", features = ["test"] }

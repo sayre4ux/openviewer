@@ -154,6 +154,36 @@ await page.keyboard.press("Meta+ArrowLeft"); await settle();
 const undoneLeft = await page.evaluate(() => window.__ov.view.state.doc.line(3).text);
 check("rebound undo beats cell navigation", undoneLeft === "| cell |", undoneLeft);
 
+// Settings → Images stays disabled until the saved settings arrive, and stays disabled if reading them
+// fails: any write sends the whole object, so an early click would put the defaults over them.
+for (const hook of [{ delay: 600 }, { fail: true }]) {
+  const p = await browser.newPage({ viewport: { width: 640, height: 620 } });
+  await p.addInitScript((h) => {
+    localStorage.setItem("openviewer.settings", JSON.stringify({ imageFolder: ".", remoteImages: true }));
+    window.__settingsLoad = h;
+  }, hook);
+  await p.goto(base + "preferences.html");
+  await p.click('.prefs-tab[data-pane="images"]');
+  const early = await p.evaluate(() => ({
+    remote: document.getElementById("remote-images").disabled,
+    folder: document.querySelector('input[name="image-folder"][value="assets"]').disabled,
+  }));
+  await p.waitForTimeout(900);
+  const later = await p.evaluate(() => ({
+    remote: document.getElementById("remote-images").disabled,
+    checked: document.getElementById("remote-images").checked,
+    folder: document.querySelector('input[name="image-folder"]:checked')?.value ?? null,
+  }));
+  if (hook.delay) {
+    check("settings controls wait for the saved settings",
+      early.remote && early.folder && !later.remote && later.checked && later.folder === ".", JSON.stringify({ early, later }));
+  } else {
+    check("settings controls stay disabled when reading them fails",
+      early.remote && later.remote, JSON.stringify({ early, later }));
+  }
+  await p.close();
+}
+
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 process.exit(results.every(Boolean) ? 0 : 1);

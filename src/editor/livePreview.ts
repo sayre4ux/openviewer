@@ -152,10 +152,12 @@ function blockedImageNode(altText: string, offer?: BlockedImage, noteText = "ima
 // Images from the internet load only after the user turns them on in Settings → Images: each
 // one tells its server that this document was opened, by whom (IP address), and when.
 let remoteImages = false;
-export function setRemoteImages(view: EditorView | null, on: boolean) {
-  if (remoteImages === on) return;
+// Returns whether the setting changed, so callers without a view know to refresh their images.
+export function setRemoteImages(view: EditorView | null, on: boolean): boolean {
+  if (remoteImages === on) return false;
   remoteImages = on;
   if (view) refreshImageResolver(view);
+  return true;
 }
 export function remoteImagesAllowed() {
   return remoteImages;

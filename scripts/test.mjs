@@ -21,7 +21,8 @@ run("rust tests", "cargo", ["test", "--quiet"], { cwd: "src-tauri" });
 
 const vite = spawn("npx", ["vite", "--port", "5173", "--strictPort"], { stdio: ["ignore", "pipe", "inherit"] });
 await new Promise((resolve, reject) => {
-  vite.stdout.on("data", (d) => String(d).includes("Local:") && resolve());
+  // Color codes split "Local:" when FORCE_COLOR is set (as in CI and some terminals), so strip them first.
+  vite.stdout.on("data", (d) => String(d).replace(/\x1b\[[0-9;]*m/g, "").includes("Local:") && resolve());
   vite.on("exit", (code) => reject(new Error(`vite exited (${code}); is port 5173 in use?`)));
 });
 try {

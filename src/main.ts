@@ -257,7 +257,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   lineEndings,
   imageUrlAllowed,
   // The app reads this from settings.json; off by default, as there.
-  setRemoteImages: (on: boolean) => setRemoteImages(view, on),
+  setRemoteImages: (on: boolean) => { setRemoteImages(view, on); },
   localImageCandidate,
   pastedImageName,
   insertImages: (markdown: string, at?: number) => doc.insertImages(markdown, at),

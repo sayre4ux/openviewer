@@ -244,9 +244,9 @@ export async function startShell(
 
   // Remote images stay off until the setting says otherwise; read before the first load so a document
   // never shows them for a moment when they're off.
+  // Only a change to remote images re-renders images; the folder setting doesn't affect them.
   const applySettings = (s: { remoteImages?: boolean }) => {
-    setRemoteImages(null, s.remoteImages === true);
-    doc.refreshImages();
+    if (setRemoteImages(null, s.remoteImages === true)) doc.refreshImages();
   };
   const { listen } = await import("@tauri-apps/api/event");
   // Listening before the first load: a startup sheet (encoding, line endings) must not hide a change.

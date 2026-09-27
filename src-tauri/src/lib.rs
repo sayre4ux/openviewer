@@ -28,6 +28,13 @@ struct Startup { ready: AtomicBool, pending: Mutex<Vec<String>> }
 #[derive(Default)]
 struct LastDocument(Mutex<Option<String>>);
 
+// The last focused document window, if it is still open. The lock is released before this returns:
+// callers go on to create windows, and `cascade_position` takes the same lock.
+fn last_document<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<String> {
+  let label = app.state::<LastDocument>().0.lock().unwrap().clone();
+  label.filter(|label| app.get_webview_window(label).is_some())
+}
+
 #[tauri::command]
 fn frontend_ready(startup: tauri::State<Startup>) -> Vec<String> {
   startup.ready.store(true, Ordering::SeqCst);
@@ -42,7 +49,7 @@ fn open_requested<R: Runtime>(app: &tauri::AppHandle<R>, path: &Path) {
     startup.pending.lock().unwrap().push(path);
   } else if let Some(window) = app.webview_windows().values().find(|w| w.label() != "preferences" && w.is_focused().unwrap_or(false)) {
     let _ = app.emit_to(window.label(), "open-path", path);
-  } else if let Some(label) = app.state::<LastDocument>().0.lock().unwrap().clone().filter(|label| app.get_webview_window(label).is_some()) {
+  } else if let Some(label) = last_document(app) {
     let _ = app.emit_to(label, "open-path", path);
   } else {
     let _ = create_document_window(app.clone(), Some(path));
@@ -82,9 +89,8 @@ fn open_window<R: Runtime>(app: &tauri::AppHandle<R>, url: String) -> Result<(),
 fn cascade_position<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<(f64, f64)> {
   let windows = app.webview_windows();
   let documents: Vec<_> = windows.values().filter(|w| w.label() != "preferences").collect();
-  let last = app.state::<LastDocument>().0.lock().unwrap().clone();
   let front = documents.iter().find(|w| w.is_focused().unwrap_or(false)).copied()
-    .or_else(|| last.and_then(|label| windows.get(&label)))?;
+    .or_else(|| last_document(app).and_then(|label| windows.get(&label)))?;
   let scale = front.scale_factor().ok()?;
   let at = front.outer_position().ok()?.to_logical::<f64>(scale);
   // The new window's frame: its content size plus the title bar the front window has.
@@ -96,8 +102,9 @@ fn cascade_position<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<(f64, f64)>
     let (p, s) = (m.work_area().position.to_logical::<f64>(scale), m.work_area().size.to_logical::<f64>(scale));
     (p.x, p.y, s.width, s.height)
   });
+  // Each window's own scale factor, so windows on another display compare in the same points.
   let taken: Vec<(f64, f64)> = documents.iter()
-    .filter_map(|w| w.outer_position().ok().map(|p| p.to_logical::<f64>(scale)))
+    .filter_map(|w| Some(w.outer_position().ok()?.to_logical::<f64>(w.scale_factor().ok()?)))
     .map(|p| (p.x, p.y))
     .collect();
   Some(cascade_from((at.x, at.y), (WINDOW_SIZE.0, WINDOW_SIZE.1 + title_bar), screen, &taken))
@@ -220,7 +227,7 @@ pub fn run() {
       // Settings handles everything else itself (Close, Quit, Undo in its search field).
       let for_document = matches!(id, "new" | "open" | "save" | "save-as" | "save-as-utf8" | "export-pdf" | "export-html");
       let target = if focused.label() == "preferences" && for_document {
-        app.state::<LastDocument>().0.lock().unwrap().clone().filter(|label| app.get_webview_window(label).is_some())
+        last_document(app)
       } else {
         Some(focused.label().to_string())
       };
@@ -310,9 +317,43 @@ mod tests {
     // Would run off the right.
     assert_eq!(cascade_from((820.0, 103.0), frame, screen, &[]), (22.0, 47.0));
     assert_eq!(cascade_from((0.0, 0.0), frame, None, &[]), (22.0, 22.0));
-    // No room to cascade at all: still returns a position.
+    // No room to cascade at all: still returns a position, the screen's top left step.
     let tiny = Some((0.0, 0.0, 1100.0, 788.0));
-    let _ = cascade_from((0.0, 0.0), frame, tiny, &[(22.0, 22.0)]);
+    assert_eq!(cascade_from((0.0, 0.0), frame, tiny, &[]), (22.0, 22.0));
+    let crowded: Vec<_> = (1..=70).map(|i| (22.0 * i as f64, 22.0 * i as f64)).collect();
+    let p = cascade_from((0.0, 0.0), frame, None, &crowded);
+    assert!(p.0.is_finite() && p.1.is_finite());
+  }
+
+  // Regression: the last-window lock was held across the `else` that creates a window, and
+  // `cascade_position` takes it again, so opening a file with no document window open hung.
+  #[test]
+  fn opening_a_file_with_no_document_window_returns() {
+    use std::{sync::{atomic::Ordering, mpsc}, time::Duration};
+    use tauri::Manager;
+    let app = tauri::test::mock_builder()
+      .manage(super::Startup::default())
+      .manage(super::LastDocument::default())
+      .manage(crate::documents::AuthorizedDocuments::default())
+      .build(tauri::test::mock_context(tauri::test::noop_assets()))
+      .unwrap();
+    app.state::<super::Startup>().ready.store(true, Ordering::SeqCst);
+    *app.state::<super::LastDocument>().0.lock().unwrap() = Some("document-closed".into());
+    let dir = std::env::temp_dir().join(format!("openviewer-open-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("note.md");
+    std::fs::write(&file, "# note\n").unwrap();
+    let handle = app.handle().clone();
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+      super::open_requested(&handle, &file);
+      let _ = done.send(());
+    });
+    let returned = finished.recv_timeout(Duration::from_secs(10)).is_ok();
+    let _ = std::fs::remove_dir_all(&dir);
+    // A hung thread still holds app state; dropping the app would wait on it and hang the test run.
+    if !returned { std::mem::forget(app); }
+    assert!(returned, "open_requested did not return: a lock is held while a window is created");
   }
 
   #[test]
