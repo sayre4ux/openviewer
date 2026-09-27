@@ -1,4 +1,4 @@
-// Behavior checks for Preferences → Shortcuts and custom shortcuts in the editor (browser mode,
+// Behavior checks for Settings → Shortcuts and custom shortcuts in the editor (browser mode,
 // where shortcuts live in localStorage instead of keybindings.json).
 // Usage: node scripts/check-prefs.mjs [outDir] [chromium|webkit]
 import { chromium, webkit } from "playwright";
@@ -73,7 +73,7 @@ await page.locator('.cm-md-cell[data-row="1"]').click(); await page.keyboard.pre
 const cellText = await page.evaluate(() => window.__ov.view.state.doc.line(5).text);
 check("new shortcut bolds in a table cell", cellText === "| **cell** |", cellText);
 
-// A change saved in Preferences reaches an open editor without reloading it.
+// A change saved in Settings reaches an open editor without reloading it.
 await page.evaluate(() => {
   localStorage.setItem("openviewer.keybindings", JSON.stringify({ italic: "Cmd+Shift+I" }));
   window.dispatchEvent(new StorageEvent("storage", { key: "openviewer.keybindings" }));
@@ -81,7 +81,7 @@ await page.evaluate(() => {
 await page.evaluate(() => { const v = window.__ov.view; v.dispatch({ changes: { from: 0, to: v.state.doc.line(1).to, insert: "plain" }, selection: { anchor: 0, head: 5 } }); v.focus(); });
 await page.keyboard.press("Meta+Shift+I"); await settle();
 const live = await page.evaluate(() => window.__ov.view.state.doc.line(1).text);
-check("live update from Preferences", live === "*plain*", live);
+check("live update from Settings", live === "*plain*", live);
 
 // --- Regressions from the review ---
 // A freed default key goes quiet instead of reaching a hidden CodeMirror command (⌘/ = toggle comment).
@@ -105,7 +105,7 @@ await page.evaluate(() => window.__ov.commands["heading-1"]()); await settle();
 const unchanged = await page.evaluate(() => window.__ov.view.state.sliceDoc());
 check("heading ignored in a cell", unchanged === "line\n\n| A |\n|---|\n| cell |\n", JSON.stringify(unchanged));
 
-// Preferences: duplicates in saved settings are resolved, and broken settings are reported.
+// Settings: duplicates in saved settings are resolved, and broken settings are reported.
 await page.setViewportSize({ width: 640, height: 620 });
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ bold: "Cmd+K", italic: "Cmd+K" })));
 await page.goto(base + "preferences.html"); await page.waitForSelector(".prefs-row"); await settle();
@@ -120,7 +120,7 @@ await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.st
 await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
 check("modifier order normalized", (await row("Bold").locator("kbd").textContent()) === "⇧⌘K" && (await row("Italic").locator("kbd").textContent()) === "⌘I");
 
-// Preferences → Images: the folder choice is kept, and only one pane shows at a time.
+// Settings → Images: the folder choice is kept, and only one pane shows at a time.
 await page.evaluate(() => localStorage.removeItem("openviewer.settings"));
 await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
 await page.click('.prefs-tab[data-pane="images"]'); await settle();

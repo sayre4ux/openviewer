@@ -1,5 +1,5 @@
 // The native menu, built from the shared command list (src/shared/commands.json) plus the user's
-// shortcut overrides in `keybindings.json` in the app's config folder. The frontend's Preferences
+// shortcut overrides in `keybindings.json` in the app's config folder. The frontend's Settings
 // window edits the overrides; editing the file by hand works too and is picked up when a window
 // regains focus.
 
@@ -139,7 +139,7 @@ pub fn sanitize(raw: &serde_json::Value) -> (HashMap<String, String>, Vec<String
 pub struct Keybindings {
   overrides: Mutex<HashMap<String, String>>,
   modified: Mutex<Option<SystemTime>>,
-  // Problems with keybindings.json (bad JSON or dropped entries), shown in Preferences.
+  // Problems with keybindings.json (bad JSON or dropped entries), shown in Settings.
   problems: Mutex<Vec<String>>,
   // View checkmarks from the focused document window, kept across menu rebuilds.
   pub checks: Mutex<HashMap<String, bool>>,
@@ -240,7 +240,7 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
   Ok(())
 }
 
-// While Preferences records a shortcut, menu accelerators would swallow the key press.
+// While Settings records a shortcut, menu accelerators would swallow the key press.
 #[tauri::command]
 pub fn suspend_shortcuts<R: Runtime>(app: AppHandle<R>, suspended: bool) -> Result<(), String> {
   let overrides = app.state::<Keybindings>().overrides.lock().unwrap().clone();
@@ -331,13 +331,13 @@ pub fn open_preferences<R: Runtime>(app: &AppHandle<R>) {
     return;
   }
   let _ = WebviewWindowBuilder::new(app, "preferences", tauri::WebviewUrl::App("preferences.html".into()))
-    .title("Preferences")
+    .title("Settings")
     .inner_size(640.0, 620.0)
     .min_inner_size(520.0, 420.0)
     .build();
 }
 
-// `suspended`: no custom shortcuts, so the Preferences recorder receives every key press.
+// `suspended`: no custom shortcuts, so the Settings recorder receives every key press.
 fn build<R: Runtime>(app: &AppHandle<R>, overrides: &HashMap<String, String>, suspended: bool) -> tauri::Result<Menu<R>> {
   let defs = commands();
   let accel = |def: &CommandDef| -> Option<String> {
@@ -373,7 +373,7 @@ fn build<R: Runtime>(app: &AppHandle<R>, overrides: &HashMap<String, String>, su
   let app_menu = SubmenuBuilder::new(app, "OpenViewer")
     .about(Some(tauri::menu::AboutMetadata { name: Some("OpenViewer".into()), ..Default::default() }))
     .separator()
-    .item(&MenuItemBuilder::with_id("preferences", "Preferences…").accelerator("CmdOrCtrl+Comma").build(app)?)
+    .item(&MenuItemBuilder::with_id("preferences", "Settings…").accelerator("CmdOrCtrl+Comma").build(app)?)
     .separator()
     .hide().hide_others().show_all().separator()
     .item(&MenuItemBuilder::with_id("quit", "Quit OpenViewer").accelerator("CmdOrCtrl+Q").build(app)?)

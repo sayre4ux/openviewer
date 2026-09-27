@@ -3,7 +3,7 @@ import { commandDefs, display, effectiveKeys, fromEvent, isUsable, type Override
 import { setupImagesPane } from "./images";
 import "./prefs.css";
 
-// Preferences → Shortcuts. Click a shortcut to record a new one: Esc cancels, ⌫ clears it.
+// Settings → Shortcuts. Click a shortcut to record a new one: Esc cancels, ⌫ clears it.
 // A shortcut already used by another command asks before moving it.
 
 const store = createKeybindingStore();

@@ -28,12 +28,12 @@ cd src-tauri && cargo test
 | `src/editor/tables.ts` | Editable table widget, local structural edits, Tidy |
 | `src/editor/*.ts` | Keymap, code highlighting, language picker, focus and typewriter modes |
 | `src/app/*.ts` | Document load and save, the Tauri shell (menus, windows, close prompt), outline, word count |
-| `src/prefs/` + `preferences.html` | The Preferences window (Shortcuts tab) |
+| `src/prefs/` + `preferences.html` | The Settings window (Shortcuts tab) |
 | `src/shared/commands.json` | **The one list of commands and default shortcuts**, read by Rust and TypeScript |
 | `src/shared/reserved.json` | System shortcuts that can't be reassigned, read by both sides |
 | `src/theme/newsprint.css` | All styling; colors and sizes are CSS variables |
 | `src-tauri/src/lib.rs` | File commands, windows, menu event routing |
-| `src-tauri/src/menu.rs` | Menu built from the command list, `keybindings.json`, Preferences window |
+| `src-tauri/src/menu.rs` | Menu built from the command list, `keybindings.json`, Settings window |
 | `scripts/` | Playwright suites (`check-*.mjs`, `shot.mjs`) and the `npm test` runner |
 
 ## Rules that must hold
@@ -45,7 +45,7 @@ cd src-tauri && cargo test
 2. **Rendering is decoration only.** `livePreview.ts` and `tables.ts` add decorations and widgets;
    they never change the text except when the user edits.
 3. **One command list.** A new menu or formatting command goes in `src/shared/commands.json`, and
-   the menu, the editor keymap, table cells, and Preferences all pick it up. Shortcuts use the
+   the menu, the editor keymap, table cells, and Settings all pick it up. Shortcuts use the
    canonical form `Cmd+Ctrl+Alt+Shift+Key` (modifiers in that order); `canonical()` exists on both
    sides.
 4. **Tables:** the widget is a block decoration from a `StateField`. Cells come from the parser's
@@ -68,7 +68,7 @@ cd src-tauri && cargo test
      32 MB, off the main thread. Images elsewhere need a folder grant from a native prompt
      (`allow_image_folder`, never the home folder, forgotten on quit).
    - Pasted and dropped images (`insert_image`, `insert_dropped_image`) are copied into the folder
-     chosen in Preferences (`settings.rs` accepts only `assets`, `{name}.assets`, `.`), never over an
+     chosen in Settings (`settings.rs` accepts only `assets`, `{name}.assets`, `.`), never over an
      existing file and never through a symlinked folder. A dropped file is usable once, and only if
      it was dropped on a window.
    - Folder grants and authorized documents are app-wide, not per window: every window runs the
@@ -78,7 +78,7 @@ cd src-tauri && cargo test
      `menu` commands to another. Quit is broadcast by Rust. `allow-destroy` stays: Tauri's
      `onCloseRequested` calls `destroy()` after our unsaved-changes prompt.
    - Remote images are off by default (`remoteImages` in `settings.json`, set only from the
-     Preferences window). Off, the editor shows a placeholder naming the host, and export drops them
+     Settings window). Off, the editor shows a placeholder naming the host, and export drops them
      and leaves `https:`/`http:` out of the page's CSP. The app's own CSP still allows `https:` images
      (a CSP can't follow a runtime setting), so the check in `buildDecorations` is the only guard:
      any new way of creating an `<img>` must go through it. Known gap once turned on: a remote image is
@@ -106,7 +106,7 @@ cd src-tauri && cargo test
 
 - In `src/main.ts`, anything used while the `EditorView` is created (`extensionsForDocument`) must
   be defined above it; a `const` defined later throws at startup.
-- macOS menu shortcuts reach the menu before the web page sees the key. Preferences calls
+- macOS menu shortcuts reach the menu before the web page sees the key. The Settings window calls
   `suspend_shortcuts` while recording a shortcut, and table cells handle their own keys.
 - CodeMirror's `WidgetType.updateDOM` keeps a focused table cell alive while its text changes; a
   change in table shape rebuilds the widget and focus moves to `pendingFocus`.

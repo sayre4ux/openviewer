@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
-// Two pages: the editor window and the Preferences window.
+// Two pages: the editor window and the Settings window.
 export default defineConfig({
   build: {
     rollupOptions: {

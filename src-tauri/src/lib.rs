@@ -23,7 +23,7 @@ static WINDOW_ID: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 struct Startup { ready: AtomicBool, pending: Mutex<Vec<String>> }
 
-// The document window that was focused last, so menu commands chosen while Preferences is in
+// The document window that was focused last, so menu commands chosen while Settings is in
 // front still reach a document.
 #[derive(Default)]
 struct LastDocument(Mutex<Option<String>>);
@@ -69,7 +69,7 @@ fn open_window<R: Runtime>(app: &tauri::AppHandle<R>, url: String) -> Result<(),
   let label = format!("document-{}", WINDOW_ID.fetch_add(1, Ordering::Relaxed));
   // DECISION: document windows keep WebKit's persistent store (not `incognito`): the outline and word
   // count toggles live in localStorage. WebKit blocks third-party cookies here, but with remote images on
-  // a server could still recognize a reader through the HTTP cache; Preferences says so.
+  // a server could still recognize a reader through the HTTP cache; Settings says so.
   let builder = WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
     .title("OpenViewer").inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1).min_inner_size(480.0, 360.0);
   let builder = match cascade_position(app) { Some((x, y)) => builder.position(x, y), None => builder };
@@ -216,8 +216,8 @@ pub fn run() {
         return;
       }
       let Some(focused) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false)) else { return };
-      // File commands chosen while Preferences is in front go to the last document window;
-      // Preferences handles everything else itself (Close, Quit, Undo in its search field).
+      // File commands chosen while Settings is in front go to the last document window;
+      // Settings handles everything else itself (Close, Quit, Undo in its search field).
       let for_document = matches!(id, "new" | "open" | "save" | "save-as" | "save-as-utf8" | "export-pdf" | "export-html");
       let target = if focused.label() == "preferences" && for_document {
         app.state::<LastDocument>().0.lock().unwrap().clone().filter(|label| app.get_webview_window(label).is_some())
@@ -238,7 +238,7 @@ pub fn run() {
         }
         menu::reload_if_changed(window.app_handle());
       }
-      // Preferences closed mid-recording: bring the menu's shortcuts back.
+      // Settings closed mid-recording: bring the menu's shortcuts back.
       tauri::WindowEvent::Destroyed if window.label() == "preferences" => {
         let _ = menu::suspend_shortcuts(window.app_handle().clone(), false);
       }
@@ -343,7 +343,7 @@ mod tests {
       assert!(docs.contains(&serde_json::json!(permission)));
       assert!(!prefs.contains(&serde_json::json!(permission)));
     }
-    // Only Preferences changes settings: a document could otherwise turn remote images on.
+    // Only the Settings window changes settings: a document could otherwise turn remote images on.
     assert!(prefs.contains(&serde_json::json!("allow-set-settings")));
     assert!(!docs.contains(&serde_json::json!("allow-set-settings")));
   }

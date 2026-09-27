@@ -17,7 +17,7 @@ pub const IMAGE_FOLDERS: &[&str] = &["assets", "{name}.assets", "."];
 pub struct Settings {
   #[serde(default = "default_image_folder")]
   pub image_folder: String,
-  // Images from the internet. Off unless the user turns it on in Preferences: loading one tells its
+  // Images from the internet. Off unless the user turns it on in Settings: loading one tells its
   // server who opened the document, from where, and when.
   #[serde(default)]
   pub remote_images: bool,

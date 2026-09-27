@@ -149,7 +149,7 @@ function blockedImageNode(altText: string, offer?: BlockedImage, noteText = "ima
   return el;
 }
 
-// Images from the internet load only after the user turns them on in Preferences → Images: each
+// Images from the internet load only after the user turns them on in Settings → Images: each
 // one tells its server that this document was opened, by whom (IP address), and when.
 let remoteImages = false;
 export function setRemoteImages(view: EditorView | null, on: boolean) {

@@ -250,7 +250,7 @@ export async function startShell(
   };
   const { listen } = await import("@tauri-apps/api/event");
   // Listening before the first load: a startup sheet (encoding, line endings) must not hide a change.
-  // Broadcast by Rust when Preferences changes a setting.
+  // Broadcast by Rust when the Settings window changes one.
   await listen<{ remoteImages?: boolean }>("settings-changed", ({ payload }) => applySettings(payload));
   await call<{ remoteImages?: boolean }>("get_settings").then(applySettings).catch(() => {});
 

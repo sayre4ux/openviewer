@@ -200,7 +200,7 @@ try {
     JSON.stringify(rendered));
   await page.screenshot({ path: `${out}/sec-images.png` });
 
-  // Turned on (Preferences → Images), public web images load; private hosts stay blocked.
+  // Turned on (Settings → Images), public web images load; private hosts stay blocked.
   const remoteOn = await page.evaluate(() => {
     window.__ov.setRemoteImages(true);
     const imgs = [...document.querySelectorAll("#editor img.cm-md-image")].map((img) => ({ alt: img.getAttribute("alt"), src: img.getAttribute("src") }));

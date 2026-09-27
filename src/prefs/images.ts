@@ -1,4 +1,4 @@
-// Preferences → Images: where pasted and dropped images are copied, and whether images from the
+// Settings → Images: where pasted and dropped images are copied, and whether images from the
 // internet load. In the app this is settings.json (read and written by Rust, which only accepts the
 // three listed folders); in the browser build it's localStorage, for tests.
 
