@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "test:all": "node scripts/test.mjs --webkit",
+    "perf": "node scripts/perf.mjs",
     "tauri": "tauri",
     "app:dev": "tauri dev",
     "app:build": "node scripts/build-app.mjs"

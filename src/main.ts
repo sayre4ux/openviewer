@@ -3,7 +3,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { Compartment, type Extension, type Text } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { lineEndings, makeState, replaceDocument } from "./app/document";
 import { createOutline } from "./app/outline";
 import { localImageCandidate, resolveClose, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
@@ -72,6 +72,8 @@ const outline = createOutline(outlineHost);
 let encoding = "UTF-8";
 const wordCount = createWordCount(statusEl, () => (encoding === "UTF-8" ? "" : encoding));
 const native = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+// Test hook (browser build): the performance harness times keystrokes up to the editor's update.
+const updateProbes: ((u: ViewUpdate) => void)[] = [];
 function extensionsForDocument(): Extension[] {
   return [
     history(),
@@ -101,6 +103,7 @@ function extensionsForDocument(): Extension[] {
       ...baseKeymap,
     ]),
     EditorView.updateListener.of((u) => {
+      for (const probe of updateProbes) probe(u);
       documentChanged();
       outline.update(u.docChanged);
       if (modes.wordCount) wordCount.update(u.docChanged, u.selectionSet);
@@ -305,6 +308,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   lineEndings,
   imageUrlAllowed,
   headingSlugs: () => headingSlugs(view.state),
+  onUpdate: (probe: (u: ViewUpdate) => void) => { updateProbes.push(probe); },
   // The app reads this from settings.json; off by default, as there.
   setRemoteImages: (on: boolean) => { setRemoteImages(view, on); },
   localImageCandidate,
