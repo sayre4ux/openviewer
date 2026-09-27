@@ -13,6 +13,7 @@ import {
 } from "@codemirror/search";
 import type { EditorState } from "@codemirror/state";
 import { EditorView, type Panel, type ViewUpdate } from "@codemirror/view";
+import { onLanguageChange, setI18nAttribute, setI18nText } from "../shared/i18n";
 
 // Find and replace: CodeMirror's search engine (query state, match highlighting, replace as one undo
 // step) with our own panel. The panel is built with DOM calls only; the query is never put into HTML.
@@ -48,21 +49,22 @@ function step(view: EditorView, forward: boolean) {
   return true;
 }
 
-function button(label: string, title: string, onClick: () => void) {
+function button(label: string, titleKey: string, onClick: () => void, labelKey?: string) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "ov-find-button";
-  b.textContent = label;
-  b.title = title;
-  b.setAttribute("aria-label", title);
+  if (labelKey) setI18nText(b, labelKey);
+  else b.textContent = label;
+  setI18nAttribute(b, "title", titleKey);
+  setI18nAttribute(b, "aria-label", titleKey);
   // Keep focus in the field, so Enter keeps working after a click.
   b.addEventListener("mousedown", (e) => e.preventDefault());
   b.addEventListener("click", onClick);
   return b;
 }
 
-function toggle(label: string, title: string, onChange: (on: boolean) => void) {
-  const b = button(label, title, () => {
+function toggle(label: string, titleKey: string, onChange: (on: boolean) => void) {
+  const b = button(label, titleKey, () => {
     const on = b.getAttribute("aria-pressed") !== "true";
     b.setAttribute("aria-pressed", String(on));
     onChange(on);
@@ -92,36 +94,36 @@ class FindPanel implements Panel {
 
     const row = document.createElement("div");
     row.className = "ov-find-row";
-    this.find = this.field("Find", this.query.search);
+    this.find = this.field("find.find", this.query.search);
     this.find.setAttribute("main-field", "true"); // CodeMirror focuses this field when the panel opens
     this.count = document.createElement("span");
     this.count.className = "ov-find-count";
     // Not a live region: the count changes with every caret move, which a screen reader would announce.
     this.count.id = `ov-find-count-${Math.random().toString(36).slice(2)}`;
-    this.caseToggle = toggle("Aa", "Match case", (on) => this.commit({ caseSensitive: on }));
-    this.wordToggle = toggle("W", "Whole words", (on) => this.commit({ wholeWord: on }));
-    this.regexToggle = toggle(".*", "Regular expression", (on) => this.commit({ regexp: on }));
+    this.caseToggle = toggle("Aa", "find.matchCase", (on) => this.commit({ caseSensitive: on }));
+    this.wordToggle = toggle("W", "find.wholeWords", (on) => this.commit({ wholeWord: on }));
+    this.regexToggle = toggle(".*", "find.regularExpression", (on) => this.commit({ regexp: on }));
     this.caseToggle.setAttribute("aria-pressed", String(this.query.caseSensitive));
     this.wordToggle.setAttribute("aria-pressed", String(this.query.wholeWord));
     this.regexToggle.setAttribute("aria-pressed", String(this.query.regexp));
-    const more = button("Replace", "Show replace", () => this.showReplace(this.replaceRow.hidden !== false));
+    const more = button("Replace", "find.showReplace", () => this.showReplace(this.replaceRow.hidden !== false), "find.replaceButton");
     more.classList.add("ov-find-more");
     row.append(
       this.find, this.count,
-      button("‹", "Previous match (⇧⌘G)", () => step(this.view, false)),
-      button("›", "Next match (⌘G)", () => step(this.view, true)),
+      button("‹", "find.previous", () => step(this.view, false)),
+      button("›", "find.next", () => step(this.view, true)),
       this.caseToggle, this.wordToggle, this.regexToggle, more,
-      button("×", "Close (Esc)", () => this.close()),
+      button("×", "find.close", () => this.close()),
     );
 
     this.replaceRow = document.createElement("div");
     this.replaceRow.className = "ov-find-row";
     this.replaceRow.hidden = true;
-    this.replace = this.field("Replace with", this.query.replace);
+    this.replace = this.field("find.replaceWith", this.query.replace);
     this.replaceRow.append(
       this.replace,
-      button("Replace", "Replace this match", () => replaceNext(this.view)),
-      button("All", "Replace all matches", () => replaceAll(this.view)),
+      button("Replace", "find.replaceMatch", () => replaceNext(this.view), "find.replaceButton"),
+      button("All", "find.replaceAll", () => replaceAll(this.view), "find.allButton"),
     );
     this.dom.append(row, this.replaceRow);
 
@@ -131,12 +133,12 @@ class FindPanel implements Panel {
     this.render();
   }
 
-  private field(placeholder: string, value: string) {
+  private field(key: string, value: string) {
     const input = document.createElement("input");
     input.type = "text";
     input.className = "ov-find-field";
-    input.placeholder = placeholder;
-    input.setAttribute("aria-label", placeholder);
+    setI18nAttribute(input, "placeholder", key);
+    setI18nAttribute(input, "aria-label", key);
     input.spellcheck = false;
     input.autocomplete = "off";
     input.value = value;
@@ -203,15 +205,23 @@ class FindPanel implements Panel {
     this.find.setAttribute("aria-describedby", this.count.id);
     if (!query.search) {
       this.count.textContent = "";
+      delete this.count.dataset.i18n;
+      delete this.count.dataset.i18nVars;
       return;
     }
     if (!query.valid) {
-      this.count.textContent = "Invalid pattern";
+      setI18nText(this.count, "find.invalidPattern");
       return;
     }
     const { total, current, capped } = countMatches(this.view.state, query);
     const all = capped ? `${total}+` : String(total);
-    this.count.textContent = total === 0 ? "No matches" : current ? `${current} of ${all}` : `${all} found`;
+    if (total === 0) setI18nText(this.count, "find.noMatches");
+    else if (current) setI18nText(this.count, "find.currentOf", { current, total: all });
+    else setI18nText(this.count, "find.totalFound", { total: all });
+  }
+
+  refreshLanguage() {
+    this.render();
   }
 
   mount() {
@@ -220,6 +230,7 @@ class FindPanel implements Panel {
 }
 
 let lastPanel: FindPanel | null = null;
+onLanguageChange(() => lastPanel?.refreshLanguage());
 
 export const findExtension = search({
   top: true,

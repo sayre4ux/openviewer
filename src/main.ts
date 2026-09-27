@@ -8,6 +8,7 @@ import { lineEndings, makeState, replaceDocument } from "./app/document";
 import { createOutline } from "./app/outline";
 import { localImageCandidate, resolveClose, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
+import { getLanguage, setLanguage } from "./shared/i18n";
 import { isInsertableImage, pastedImageName } from "./app/imageNames";
 import { blockStats, mathCutoff, prerenderDiagrams, refreshRendering } from "./editor/blocks";
 import { codeHighlight } from "./editor/codeHighlight";
@@ -338,6 +339,8 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   commands,
   modes,
   lineEndings,
+  setLanguage,
+  getLanguage,
   imageUrlAllowed,
   headingSlugs: () => headingSlugs(view.state),
   onUpdate: (probe: (u: ViewUpdate) => void) => { updateProbes.push(probe); },

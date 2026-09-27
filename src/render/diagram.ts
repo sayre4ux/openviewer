@@ -1,5 +1,6 @@
 import type { Config, DOMPurify } from "dompurify";
 import { loads } from "./loads";
+import { t } from "../shared/i18n";
 
 // Mermaid diagrams. Mermaid runs in a hidden <iframe sandbox="allow-scripts"> (public/diagram/): an
 // opaque origin with its own no-network CSP and no Tauri IPC, so its temporary DOM and styles never
@@ -35,7 +36,7 @@ const MAX_BLOCKED = 50;
 const MAX_MESSAGE = 200;
 const PENDING_KEY = "openviewer.diagram.pending";
 const BLOCKED_KEY = "openviewer.diagram.blocked";
-export const BLOCKED_NOTE = "This diagram stopped OpenViewer last time";
+export const BLOCKED_NOTE = "diagram.blocked";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 // A <style> that could load or escape something: anything that isn't an in-image url(#id) reference.
@@ -177,19 +178,19 @@ function base64Utf8(text: string) {
 // and it protects whoever opens an exported image directly. Strict: a false refusal shows the source.
 export function diagramFromSvg(svg: string): DiagramResult {
   if (!purify) throw new Error("diagramFromSvg before the sanitizer loaded");
-  if (svg.length > MAX_SVG) return fail("too-large", "diagram too large");
+  if (svg.length > MAX_SVG) return fail("too-large", t("diagram.tooLarge"));
   removedForeign = 0;
   const body = purify.sanitize(svg, { ...DIAGRAM_PURIFY, RETURN_DOM: true }) as Element;
-  if (removedForeign > 0) return fail("unsupported", "this diagram needs HTML labels, which OpenViewer doesn't show");
+  if (removedForeign > 0) return fail("unsupported", t("diagram.unsupported"));
   const roots = Array.from(body.children);
   const root = roots[0];
-  if (roots.length !== 1 || root.localName !== "svg" || root.namespaceURI !== SVG_NS) return fail("unsafe-output", "the diagram's output isn't a single SVG image");
+  if (roots.length !== 1 || root.localName !== "svg" || root.namespaceURI !== SVG_NS) return fail("unsafe-output", t("diagram.unsafeOutput"));
   for (const style of root.querySelectorAll("style")) {
-    if (STYLE_LOADS.test(style.textContent ?? "")) return fail("unsafe-output", "the diagram's styles refer to something outside it");
+    if (STYLE_LOADS.test(style.textContent ?? "")) return fail("unsafe-output", t("diagram.unsafeOutput"));
   }
   const box = (root.getAttribute("viewBox") ?? "").trim().split(/[\s,]+/).map(Number);
   if (box.length !== 4 || !box.every(Number.isFinite) || box[2] <= 0 || box[3] <= 0 || box[2] > MAX_SIDE || box[3] > MAX_SIDE) {
-    return fail("unsafe-output", "the diagram's size is out of range");
+    return fail("unsafe-output", t("diagram.unsafeOutput"));
   }
   // An intrinsic size, so the image lays out at its natural width and scales down from there.
   const width = Math.ceil(box[2]);
@@ -243,7 +244,7 @@ function createFrame(): Frame {
     if (++loads === 1 || frame !== made) return;
     markReady(false);
     dropFrame();
-    if (current) abandon(current.job, fail("unsafe-output", "the diagram renderer left its page"));
+    if (current) abandon(current.job, fail("unsafe-output", t("diagram.unsafeOutput")));
   });
   // A real URL, not srcdoc: Tauri's IPC entry point parses the sender's URL before it checks the key.
   el.src = "/diagram/frame.html";
@@ -299,15 +300,16 @@ function finish(job: Job, reply: FrameReply) {
     try {
       result = diagramFromSvg(reply.svg);
     } catch {
-      result = fail("unsafe-output", "the diagram's output couldn't be read");
+      result = fail("unsafe-output", t("diagram.unsafeOutput"));
     }
   } else if (reply.kind === "syntax") {
-    result = fail("syntax", reply.message);
+    result = fail("syntax", t("diagram.syntax"));
   } else {
     // DECISION: a syntax error is an ordinary result; any other failure inside the frame replaces it,
     // in case Mermaid was left in a bad state.
     dropFrame();
-    result = fail(/limit|exceed|maximum/i.test(reply.message) ? "limit" : "unsupported", reply.message);
+    result = fail(/limit|exceed|maximum/i.test(reply.message) ? "limit" : "unsupported",
+      /limit|exceed|maximum/i.test(reply.message) ? t("diagram.limit") : t("diagram.error"));
   }
   remember(job.source, result);
   job.resolve(result);
@@ -327,7 +329,7 @@ function abandon(job: Job, result: DiagramResult) {
 }
 
 function timedOut(job: Job) {
-  abandon(job, fail("timeout", "the diagram took too long to render"));
+  abandon(job, fail("timeout", t("diagram.timeout")));
 }
 
 async function pump() {
@@ -347,7 +349,7 @@ async function pump() {
   if (!ready || !f?.el.contentWindow) {
     current = null;
     dropFrame();
-    job.resolve(fail("timeout", "the diagram renderer didn't start"));
+    job.resolve(fail("timeout", t("diagram.timeout")));
     void pump();
     return;
   }
@@ -359,8 +361,8 @@ async function pump() {
 
 // Renders a diagram, or says why not. `force` renders a diagram the hang guard blocked.
 export function renderDiagram(source: string, options?: { force: boolean }): Promise<DiagramResult> {
-  if (!enabled) return Promise.resolve(fail("off", "diagrams are off"));
-  if (source.length > MAX_SOURCE) return Promise.resolve(fail("too-long", "diagram too long"));
+  if (!enabled) return Promise.resolve(fail("off", t("diagram.off")));
+  if (source.length > MAX_SOURCE) return Promise.resolve(fail("too-long", t("diagram.tooLong")));
   const hit = cache.get(source);
   if (hit) {
     cache.delete(source);
@@ -368,10 +370,10 @@ export function renderDiagram(source: string, options?: { force: boolean }): Pro
     return Promise.resolve(hit);
   }
   const hash = diagramHash(source);
-  if (!options?.force && isBlocked(hash)) return Promise.resolve(fail("blocked", BLOCKED_NOTE));
+  if (!options?.force && isBlocked(hash)) return Promise.resolve(fail("blocked", t(BLOCKED_NOTE)));
   const running = inflight.get(source);
   if (running) return running;
-  if (queue.length >= MAX_QUEUE) return Promise.resolve(fail("limit", "too many diagrams waiting"));
+  if (queue.length >= MAX_QUEUE) return Promise.resolve(fail("limit", t("diagram.limit")));
   const promise = new Promise<DiagramResult>((resolve) => {
     queue.push({ id: nextId++, source, hash, resolve });
   });
@@ -400,7 +402,7 @@ export function resetDiagrams(): void {
   }
   dropFrame();
   inflight.clear();
-  for (const job of dropped) job.resolve(fail("timeout", "cancelled"));
+  for (const job of dropped) job.resolve(fail("timeout", t("diagram.off")));
 }
 
 export function diagramGeneration(): number {

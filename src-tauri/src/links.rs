@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
   documents::{has_extension, AuthorizedDocuments, DOCUMENT_EXTENSIONS},
+  i18n,
   images::{home_dir, image_root, percent_decode},
 };
 
@@ -22,31 +23,31 @@ pub fn linked_document(document: &Path, target: &str, home: Option<&Path>) -> Re
     scheme.len() > 1 && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
   });
   if decoded.is_empty() || has_scheme || decoded.starts_with('~') {
-    return Err("That link isn't a document next to this one.".into());
+    return Err(i18n::t("error.link.outside"));
   }
   let document = fs::canonicalize(document).map_err(|e| e.to_string())?;
-  let folder = document.parent().ok_or("Invalid document path")?;
+  let folder = document.parent().ok_or_else(|| i18n::t("error.file.invalidPath"))?;
   let candidate = if Path::new(&decoded).is_absolute() { PathBuf::from(&decoded) } else { folder.join(&decoded) };
-  let linked = fs::canonicalize(&candidate).map_err(|_| format!("{} doesn't exist.", display_name(&candidate)))?;
+  let linked = fs::canonicalize(&candidate).map_err(|_| i18n::t_with("error.link.missing", &[("name", &display_name(&candidate))]))?;
   if !has_extension(&linked, DOCUMENT_EXTENSIONS) {
-    return Err("Only Markdown and text documents open from a link.".into());
+    return Err(i18n::t("error.link.type"));
   }
-  let root = image_root(&document, home).ok_or("Invalid document path")?;
+  let root = image_root(&document, home).ok_or_else(|| i18n::t("error.file.invalidPath"))?;
   // A document saved directly in the home folder or at the disk root reaches only its own folder.
   let broad = Some(root.as_path()) == home || root.parent().is_none();
   let inside = if broad { linked.parent() == Some(root.as_path()) } else { linked.starts_with(&root) };
   if !inside {
-    return Err(format!("{} is outside this document's folder or repository, so it doesn't open from a link.", display_name(&linked)));
+    return Err(i18n::t_with("error.link.boundary", &[("name", &display_name(&linked))]));
   }
   let meta = fs::metadata(&linked).map_err(|e| e.to_string())?;
   if !meta.is_file() || meta.len() > DOCUMENT_LIMIT {
-    return Err(format!("{} can't be opened.", display_name(&linked)));
+    return Err(i18n::t_with("error.link.cannotOpen", &[("name", &display_name(&linked))]));
   }
   Ok(linked)
 }
 
 fn display_name(path: &Path) -> String {
-  path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "The linked document".into())
+  path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| i18n::t("error.link.linkedDocument"))
 }
 
 #[tauri::command]

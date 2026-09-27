@@ -12,6 +12,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 use tauri_plugin_updater::UpdaterExt;
 
+use crate::i18n;
+
 const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(20);
 const DAILY_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 // DECISION: Let a delayed or unattended close prompt hold installation for up to five minutes.
@@ -64,7 +66,7 @@ pub fn start_daily_checks<R: Runtime>(app: AppHandle<R>) {
 pub fn check_from_menu<R: Runtime>(app: AppHandle<R>) {
   if !is_configured(&app.config().plugins.0) {
     // DECISION: Keep this menu item available in development builds and explain why it cannot check.
-    show_message(&app, "Updates aren't set up in this build", MessageDialogKind::Info);
+    show_message(&app, &i18n::t("updater.notConfigured"), MessageDialogKind::Info);
     return;
   }
   tauri::async_runtime::spawn(check_for_updates(app, true));
@@ -74,7 +76,7 @@ async fn check_for_updates<R: Runtime>(app: AppHandle<R>, report_no_update: bool
   let state = app.state::<RuntimeState>();
   if state.checking.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
     if report_no_update {
-      show_message(&app, "An update check is already in progress", MessageDialogKind::Info);
+      show_message(&app, &i18n::t("updater.inProgress"), MessageDialogKind::Info);
     }
     return;
   }
@@ -88,24 +90,26 @@ async fn check_for_updates<R: Runtime>(app: AppHandle<R>, report_no_update: bool
 
   match result {
     Ok(Some(update)) => prompt_to_install(app, update),
-    Ok(None) if report_no_update => show_message(&app, "You're up to date", MessageDialogKind::Info),
+    Ok(None) if report_no_update => show_message(&app, &i18n::t("updater.current"), MessageDialogKind::Info),
     Ok(None) => {}
-    Err(error) if report_no_update => show_message(&app, &format!("Couldn't check for updates:\n{error}"), MessageDialogKind::Error),
+    Err(error) if report_no_update => show_message(&app, &i18n::t_with("updater.checkFailed", &[("error", &error)]), MessageDialogKind::Error),
     Err(error) => log::info!("automatic update check failed: {error}"),
   }
 }
 
 fn prompt_to_install<R: Runtime>(app: AppHandle<R>, update: tauri_plugin_updater::Update) {
-  let notes = update.body.as_deref().filter(|body| !body.trim().is_empty()).unwrap_or("No release notes were provided.");
-  let message = format!("Version {} is available.\n\n{}", update.version, notes);
+  let notes = update.body.as_deref().filter(|body| !body.trim().is_empty())
+    .map(str::to_owned).unwrap_or_else(|| i18n::t("updater.noNotes"));
+  let version = update.version.to_string();
+  let message = i18n::t_with("updater.available", &[("version", &version), ("notes", &notes)]);
   let app_for_dialog = app.clone();
   app.dialog()
     .message(message)
-    .title("Update Available")
+    .title(i18n::t("updater.availableTitle"))
     .kind(MessageDialogKind::Info)
-    .buttons(MessageDialogButtons::OkCancelCustom("Install and Relaunch".into(), "Later".into()))
+    .buttons(MessageDialogButtons::OkCancelCustom(i18n::t("updater.install"), i18n::t("updater.later")))
     .show_with_result(move |result| {
-      if result == MessageDialogResult::Custom("Install and Relaunch".into()) {
+      if result == MessageDialogResult::Custom(i18n::t("updater.install")) {
         let app = app_for_dialog;
         tauri::async_runtime::spawn(async move {
           if app.state::<RuntimeState>().installing.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
@@ -114,7 +118,7 @@ fn prompt_to_install<R: Runtime>(app: AppHandle<R>, update: tauri_plugin_updater
           let outcome = install_and_relaunch(app.clone(), update).await;
           app.state::<RuntimeState>().installing.store(false, Ordering::Release);
           if let Err(error) = outcome {
-            show_message(&app, &format!("Couldn't install the update:\n{error}"), MessageDialogKind::Error);
+            show_message(&app, &i18n::t_with("updater.installFailed", &[("error", &error)]), MessageDialogKind::Error);
           }
         });
       }
@@ -162,14 +166,14 @@ async fn wait_for_approvals(receiver: Receiver<Approval>, expected_count: usize)
     while seen.len() < expected_count {
       let remaining = deadline.saturating_duration_since(Instant::now());
       if remaining.is_zero() {
-        return Err("Not every window responded to the update prompt".to_string());
+        return Err(i18n::t("updater.notEveryWindow"));
       }
       match receiver.recv_timeout(remaining) {
         Ok(approval) => {
           if seen.insert(approval.label) { all_accepted &= approval.accepted; }
         }
-        Err(mpsc::RecvTimeoutError::Timeout) => return Err("Not every window responded to the update prompt".to_string()),
-        Err(mpsc::RecvTimeoutError::Disconnected) => return Err("The update prompt was interrupted".to_string()),
+        Err(mpsc::RecvTimeoutError::Timeout) => return Err(i18n::t("updater.notEveryWindow")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => return Err(i18n::t("updater.interrupted")),
       }
     }
     Ok(all_accepted)
@@ -184,20 +188,20 @@ pub fn update_quit_response<R: Runtime>(
   accepted: bool,
 ) -> Result<(), String> {
   let mut pending = coordinator.0.lock().unwrap();
-  let request = pending.get_mut(&request_id).ok_or_else(|| "This update request is no longer active".to_string())?;
+  let request = pending.get_mut(&request_id).ok_or_else(|| i18n::t("updater.requestInactive"))?;
   let label = window.label().to_string();
   if !request.expected.contains(&label) {
-    return Err("This window wasn't part of the update request".into());
+    return Err(i18n::t("updater.notExpected"));
   }
   if !request.responded.insert(label.clone()) {
-    return Err("This window already responded to the update request".into());
+    return Err(i18n::t("updater.alreadyResponded"));
   }
   request.sender.send(Approval { label, accepted }).map_err(|error| error.to_string())?;
   Ok(())
 }
 
 fn show_message<R: Runtime>(app: &AppHandle<R>, message: &str, kind: MessageDialogKind) {
-  app.dialog().message(message).title("OpenViewer Updates").kind(kind)
+  app.dialog().message(message).title(i18n::t("updater.title")).kind(kind)
     .buttons(MessageDialogButtons::Ok).show(|_| {});
 }
 

@@ -8,6 +8,7 @@ import { inlineMathClose, inlineMathOpens, isDisplayFence, startsBlock } from ".
 import { type DiagramResult, diagramsEnabled, MAX_DIAGRAMS, renderDiagram } from "../render/diagram";
 import { loads } from "../render/loads";
 import { loadMath, MAX_FORMULAS, type MathKind, mathReady, renderMath } from "../render/math";
+import { t as translate } from "../shared/i18n";
 import exportCss from "./export.css?raw";
 
 // Export: the document as one standalone HTML page. Markdown is rendered with marked and sanitized
@@ -201,7 +202,7 @@ async function embed(img: HTMLImageElement, options: ExportOptions, cache: Map<s
   // DECISION: an image that can't be shown becomes its alt text, as in the editor.
   const alt = document.createElement("span");
   alt.className = "ov-missing-image";
-  alt.textContent = img.getAttribute("alt") || "image";
+  alt.textContent = img.getAttribute("alt") || translate("image.exportAlt");
   img.replaceWith(alt);
 }
 
@@ -232,7 +233,7 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
       code(token) {
         const r = diagrams.get(token);
         if (!r?.ok) return false; // an ordinary code block
-        return `<p class="ov-diagram"><img src="${r.dataUrl}" alt="Mermaid diagram" width="${r.width}" height="${r.height}"></p>\n`;
+        return `<p class="ov-diagram"><img src="${r.dataUrl}" alt="${escapeHtml(translate("block.mermaidAlt"))}" width="${r.width}" height="${r.height}"></p>\n`;
       },
     },
   });
@@ -259,7 +260,7 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
   const budget = { left: options.embedBudget ?? EMBED_BUDGET };
   for (const img of Array.from(body.querySelectorAll("img"))) await embed(img, options, cache, budget);
   const remote = Array.from(body.querySelectorAll("img")).some((img) => /^https?:/i.test(img.getAttribute("src") ?? ""));
-  const title = headingText(body.querySelector("h1")) || options.name || "Untitled";
+  const title = headingText(body.querySelector("h1")) || options.name || translate("app.untitled");
   const holder = document.createElement("div");
   holder.append(body);
   return `<!doctype html>

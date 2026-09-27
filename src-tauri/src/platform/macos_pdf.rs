@@ -22,6 +22,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL};
 use objc2_web_kit::{WKWebView, WKWebViewConfiguration, WKWebsiteDataStore};
 use tauri::{AppHandle, Runtime};
+use crate::i18n;
 
 // Remote images get this long to load before the page is printed without them.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -59,7 +60,7 @@ fn queues() -> std::sync::MutexGuard<'static, Queues> {
 }
 
 // The error for a print that didn't finish; its output folder must outlive the print operation.
-pub const TIMED_OUT: &str = "The PDF export timed out.";
+pub const TIMED_OUT: &str = "pdf-timeout:";
 
 pub struct DelegateIvars {
   id: u64,
@@ -76,7 +77,7 @@ define_class!(
     #[unsafe(method(printOperationDidRun:success:contextInfo:))]
     fn did_run(&self, _operation: &NSPrintOperation, success: Bool, _context: *mut c_void) {
       // WebKit calls this on its printing thread; the next tick on the main thread picks it up.
-      let result = if success.as_bool() { Ok(()) } else { Err("The PDF couldn't be created.".into()) };
+      let result = if success.as_bool() { Ok(()) } else { Err(i18n::t("error.export.pdfFailed")) };
       let id = self.ivars().id;
       let mut queues = queues();
       if let Some(i) = queues.abandoned.iter().position(|(a, _)| *a == id) {
@@ -130,7 +131,7 @@ pub async fn print_to_pdf<R: Runtime>(app: &AppHandle<R>, html: String, out: Pat
 }
 
 fn begin(id: u64, html: &str, out: PathBuf, done: Done, alive: Arc<AtomicBool>) -> Result<(), String> {
-  let mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
+  let mtm = MainThreadMarker::new().ok_or_else(|| i18n::t("error.export.pdfMainThread"))?;
   let frame = NSRect::new(NSPoint::new(0.0, 0.0), PAGE);
   unsafe {
     let config = WKWebViewConfiguration::new(mtm);

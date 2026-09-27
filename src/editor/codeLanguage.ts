@@ -1,4 +1,5 @@
 import { EditorView, WidgetType } from "@codemirror/view";
+import { setI18nAttribute, setI18nText } from "../shared/i18n";
 
 // The header of a fenced code block: the language name and a chevron. A native <select> sits
 // transparently on top, so clicking opens the macOS menu, and picking a language rewrites the
@@ -75,17 +76,20 @@ export class CodeLanguageWidget extends WidgetType {
     wrap.className = "cm-md-lang";
     const label = document.createElement("span");
     label.className = "cm-md-lang-label";
-    label.textContent = labelFor(this.info) || "Plain text";
+    const currentLabel = labelFor(this.info);
+    if (!this.info) setI18nText(label, "codeLanguage.plainText");
+    else label.textContent = currentLabel || "Plain text";
     label.insertAdjacentHTML("beforeend", chevron);
 
     const select = document.createElement("select");
     select.className = "cm-md-lang-select";
-    select.setAttribute("aria-label", "Code language");
+    setI18nAttribute(select, "aria-label", "codeLanguage.label");
     const known = new Set(languages.map(([id]) => id));
     const options = known.has(this.info.toLowerCase()) || !this.info ? languages : [[this.info, this.info] as [string, string], ...languages];
     const current = aliases[this.info.toLowerCase()] ?? this.info.toLowerCase();
     for (const [id, name] of options) {
       const option = new Option(name, id, false, id === current || id === this.info);
+      if (!id) setI18nText(option, "codeLanguage.plainText");
       select.add(option);
     }
     select.addEventListener("change", () => {

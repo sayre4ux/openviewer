@@ -12,7 +12,7 @@ use std::{
 use tauri::{Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::documents::{has_extension, write_regular_file, AuthorizedDocuments};
+use crate::{documents::{has_extension, write_regular_file, AuthorizedDocuments}, i18n};
 use crate::images::{self, ImageGrants};
 use crate::platform;
 
@@ -26,19 +26,19 @@ fn extension_for(format: &str) -> Result<&'static str, String> {
   match format {
     "pdf" => Ok("pdf"),
     "html" => Ok("html"),
-    _ => Err(format!("Unknown export format {format}")),
+    _ => Err(i18n::t_with("error.export.unknownFormat", &[("format", format)])),
   }
 }
 
 // The target the user picked, with the format's extension, in a folder that exists.
 fn export_target(selected: &Path, ext: &str) -> Result<PathBuf, String> {
-  let name = selected.file_name().ok_or("Invalid file name")?.to_string_lossy().into_owned();
+  let name = selected.file_name().ok_or_else(|| i18n::t("error.file.invalidName"))?.to_string_lossy().into_owned();
   let name = if has_extension(Path::new(&name), &[ext]) || (ext == "html" && has_extension(Path::new(&name), &["htm"])) {
     name
   } else {
     format!("{name}.{ext}")
   };
-  let parent = selected.parent().filter(|p| !p.as_os_str().is_empty()).ok_or("Invalid file path")?;
+  let parent = selected.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| i18n::t("error.file.invalidPath"))?;
   Ok(fs::canonicalize(parent).map_err(|e| e.to_string())?.join(name))
 }
 
@@ -46,7 +46,7 @@ impl ExportTargets {
   fn take(&self, path: &str, ext: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
     let ok = has_extension(&path, &[ext]) || (ext == "html" && has_extension(&path, &["htm"]));
-    if ok && self.0.lock().unwrap().remove(&path) { Ok(path) } else { Err("Choose where to export in the Export dialog.".into()) }
+    if ok && self.0.lock().unwrap().remove(&path) { Ok(path) } else { Err(i18n::t("dialog.exportOutside")) }
   }
 }
 
@@ -54,8 +54,9 @@ impl ExportTargets {
 pub async fn export_dialog<R: Runtime>(app: tauri::AppHandle<R>, format: String, default_path: String) -> Result<Option<String>, String> {
   let ext = extension_for(&format)?;
   let default = Path::new(&default_path);
-  let stem = default.file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("Untitled");
-  let label = if ext == "pdf" { "PDF" } else { "HTML" };
+  let untitled = i18n::t("app.untitled");
+  let stem = default.file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or(&untitled);
+  let label = i18n::t(if ext == "pdf" { "error.export.filter.pdf" } else { "error.export.filter.html" });
   let mut dialog = app.dialog().file().add_filter(label, &[ext]).set_file_name(format!("{stem}.{ext}"));
   if let Some(dir) = default.parent().filter(|p| !p.as_os_str().is_empty() && p.is_dir()) { dialog = dialog.set_directory(dir); }
   let Some(selected) = dialog.blocking_save_file() else { return Ok(None) };
@@ -67,14 +68,14 @@ pub async fn export_dialog<R: Runtime>(app: tauri::AppHandle<R>, format: String,
 #[tauri::command]
 pub async fn export_html(targets: tauri::State<'_, ExportTargets>, path: String, html: String) -> Result<(), String> {
   let target = targets.take(&path, "html")?;
-  if html.len() > EXPORT_LIMIT { return Err("The export is too large.".into()); }
+  if html.len() > EXPORT_LIMIT { return Err(i18n::t("error.export.tooLarge")); }
   write_regular_file(&target, html.as_bytes())
 }
 
 #[tauri::command]
 pub async fn export_pdf<R: Runtime>(app: tauri::AppHandle<R>, path: String, html: String) -> Result<(), String> {
   let target = app.state::<ExportTargets>().take(&path, "pdf")?;
-  if html.len() > EXPORT_LIMIT { return Err("The export is too large.".into()); }
+  if html.len() > EXPORT_LIMIT { return Err(i18n::t("error.export.tooLarge")); }
   write_regular_file(&target, &render_pdf(&app, html).await?)
 }
 
@@ -86,11 +87,14 @@ pub async fn render_pdf<R: Runtime>(app: &tauri::AppHandle<R>, html: String) -> 
   let result = platform::print_to_pdf(app, html, out.clone()).await.and_then(|()| {
     let mut bytes = Vec::new();
     platform::open_for_read(&out)?.take(EXPORT_LIMIT as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    if bytes.len() > EXPORT_LIMIT { return Err("The PDF is too large.".into()); }
-    if bytes.starts_with(b"%PDF") { Ok(bytes) } else { Err("The PDF couldn't be created.".into()) }
+    if bytes.len() > EXPORT_LIMIT { return Err(i18n::t("error.export.pdfTooLarge")); }
+    if bytes.starts_with(b"%PDF") { Ok(bytes) } else { Err(i18n::t("error.export.pdfFailed")) }
   });
   // DECISION: a timed-out print may still be writing there, so its (private) folder is left behind.
-  if !matches!(&result, Err(e) if e == platform::TIMED_OUT) { let _ = fs::remove_dir_all(&dir); }
+  if matches!(&result, Err(e) if e == platform::TIMED_OUT) {
+    return Err(i18n::t("error.export.pdfTimeout"));
+  }
+  let _ = fs::remove_dir_all(&dir);
   result
 }
 

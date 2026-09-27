@@ -10,14 +10,23 @@ const base = process.env.OV_URL ?? "http://localhost:5173/";
 mkdirSync(out, { recursive: true });
 const browser = engine === "webkit" ? await webkit.launch() : await chromium.launch({ channel: "chrome" });
 const page = await browser.newPage({ viewport: { width: 640, height: 620 }, deviceScaleFactor: 2 });
+// Settings opens on General; the shortcut rows are on the Shortcuts tab.
+async function showShortcuts(p) {
+  await p.waitForSelector('.prefs-tab[data-pane="shortcuts"]');
+  await p.click('.prefs-tab[data-pane="shortcuts"]');
+  await p.waitForSelector(".prefs-row");
+}
 page.on("pageerror", (e) => console.log("PAGE ERROR:", e.message));
 const results = [];
 const check = (name, ok, detail = "") => { results.push(ok); console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`); };
 const settle = (ms = 150) => page.waitForTimeout(ms);
 
 await page.goto(base + "preferences.html");
-await page.evaluate(() => localStorage.clear());
-await page.reload(); await page.waitForSelector(".prefs-row");
+await page.evaluate(() => {
+  localStorage.clear();
+  localStorage.setItem("openviewer.settings", JSON.stringify({ language: "en" }));
+});
+await page.reload(); await showShortcuts(page);
 const overrides = () => page.evaluate(() => JSON.parse(localStorage.getItem("openviewer.keybindings") ?? "{}"));
 const row = (label) => page.locator(".prefs-row", { has: page.locator(".prefs-label", { hasText: new RegExp(`^${label}$`) }) });
 const record = async (label, keys) => { await row(label).locator(".prefs-key").click(); await settle(); await page.keyboard.press(keys); await settle(); };
@@ -109,27 +118,27 @@ check("heading ignored in a cell", unchanged === "line\n\n| A |\n|---|\n| cell |
 // Settings: duplicates in saved settings are resolved, and broken settings are reported.
 await page.setViewportSize({ width: 640, height: 620 });
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ bold: "Cmd+K", italic: "Cmd+K" })));
-await page.goto(base + "preferences.html"); await page.waitForSelector(".prefs-row"); await settle();
+await page.goto(base + "preferences.html"); await showShortcuts(page); await settle();
 check("duplicate override dropped", (await row("Italic").locator("kbd").textContent()) === "⌘I" && (await row("Bold").locator("kbd").textContent()) === "⌘K");
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", "{ bad json,"));
-await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.reload(); await showShortcuts(page); await settle();
 check("broken settings reported", await page.isVisible("#problems") && (await page.textContent("#problems")).includes("valid JSON"));
 await page.screenshot({ path: `${out}/p3-problems.png` });
 
 // Modifier order doesn't hide a duplicate.
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ bold: "Shift+Cmd+K", italic: "Cmd+Shift+K" })));
-await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.reload(); await showShortcuts(page); await settle();
 check("modifier order normalized", (await row("Bold").locator("kbd").textContent()) === "⇧⌘K" && (await row("Italic").locator("kbd").textContent()) === "⌘I");
 
 // Settings → Images: the folder choice is kept, and only one pane shows at a time.
 await page.evaluate(() => localStorage.removeItem("openviewer.settings"));
-await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.reload(); await showShortcuts(page); await settle();
 await page.click('.prefs-tab[data-pane="images"]'); await settle();
 check("images tab shows its pane", await page.isVisible("#pane-images") && !(await page.isVisible("#pane-shortcuts")));
 check("images default to ./assets", await page.isChecked('input[name="image-folder"][value="assets"]'));
 await page.click('input[name="image-folder"][value="{name}.assets"]'); await settle();
 await page.screenshot({ path: `${out}/p4-images.png` });
-await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.reload(); await showShortcuts(page); await settle();
 check("image folder choice kept", await page.isChecked('input[name="image-folder"][value="{name}.assets"]'),
   await page.evaluate(() => localStorage.getItem("openviewer.settings")));
 
@@ -140,7 +149,7 @@ check("remote images warning explains the risk",
   /IP address/.test(await page.textContent("#pane-images")) && /read receipt/.test(await page.textContent("#pane-images")));
 await page.click("#remote-images"); await settle();
 await page.screenshot({ path: `${out}/p5-remote-images.png`, fullPage: true });
-await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.reload(); await showShortcuts(page); await settle();
 const savedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem("openviewer.settings") ?? "{}"));
 check("remote images choice kept with the folder", savedSettings.remoteImages === true && savedSettings.imageFolder === "{name}.assets",
   JSON.stringify(savedSettings));
@@ -149,7 +158,7 @@ check("remote images choice kept with the folder", savedSettings.remoteImages ==
 await page.click('.prefs-tab[data-pane="images"]'); await settle();
 check("diagrams default on", await page.isChecked("#diagrams"));
 await page.click("#diagrams"); await settle();
-await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.reload(); await showShortcuts(page); await settle();
 await page.click('.prefs-tab[data-pane="images"]'); await settle();
 const diagramSettings = await page.evaluate(() => JSON.parse(localStorage.getItem("openviewer.settings") ?? "{}"));
 check("diagrams choice kept with the others",
@@ -172,7 +181,7 @@ check("rebound undo beats cell navigation", undoneLeft === "| cell |", undoneLef
 for (const hook of [{ delay: 600 }, { fail: true }]) {
   const p = await browser.newPage({ viewport: { width: 640, height: 620 } });
   await p.addInitScript((h) => {
-    localStorage.setItem("openviewer.settings", JSON.stringify({ imageFolder: ".", remoteImages: true }));
+    localStorage.setItem("openviewer.settings", JSON.stringify({ imageFolder: ".", remoteImages: true, language: "en" }));
     window.__settingsLoad = h;
   }, hook);
   await p.goto(base + "preferences.html");

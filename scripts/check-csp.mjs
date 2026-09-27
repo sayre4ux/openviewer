@@ -27,6 +27,12 @@ const base = `http://127.0.0.1:${server.address().port}/`;
 
 const browser = engine === "webkit" ? await webkit.launch() : await chromium.launch({ channel: "chrome" });
 const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+// Settings opens on General; the shortcut rows are on the Shortcuts tab.
+async function showShortcuts(p) {
+  await p.waitForSelector('.prefs-tab[data-pane="shortcuts"]');
+  await p.click('.prefs-tab[data-pane="shortcuts"]');
+  await p.waitForSelector(".prefs-row");
+}
 const violations = [];
 await page.exposeFunction("__cspViolation", (v) => violations.push(v));
 await page.addInitScript(() => {
@@ -74,7 +80,7 @@ const exported = await page.evaluate(async () => {
 check("math export under CSP embeds all 20 KaTeX fonts", exported.faces === 20 && exported.katex === 2, JSON.stringify(exported));
 
 await page.goto(base + "preferences.html");
-await page.waitForSelector(".prefs-row");
+await showShortcuts(page);
 const commandCount = JSON.parse(await readFile("src/shared/commands.json", "utf8")).length;
 check("preferences render under CSP", (await page.locator(".prefs-row").count()) === commandCount);
 

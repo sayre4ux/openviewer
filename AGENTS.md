@@ -167,6 +167,9 @@ cd src-tauri && cargo test
 ## Conventions
 
 - TypeScript is strict. Keep modules small and match the surrounding style.
+- Every user-visible interface string goes through `src/shared/i18n/`; English is the source and the
+  Rust test enforces catalog key and placeholder parity across languages. Keep Markdown document
+  text unchanged.
 - Comments explain why, not what. Mark a judgment call with `// DECISION:`.
 - Every behavior fix gets a check in a `scripts/check-*.mjs` suite.
 - Commit messages: a short imperative subject, then a body that says what changed and why.

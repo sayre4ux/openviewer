@@ -1,6 +1,8 @@
 import { createKeybindingStore } from "../shared/keybindings";
 import { commandDefs, display, effectiveKeys, fromEvent, isUsable, type Overrides, reserved } from "../shared/keys";
+import { applyTranslations, onLanguageChange, setLanguage, t } from "../shared/i18n";
 import { setupImagesPane } from "./images";
+import { setupLanguagePane } from "./language";
 import "./prefs.css";
 
 // Settings → Shortcuts. Click a shortcut to record a new one: Esc cancels, ⌫ clears it.
@@ -11,25 +13,48 @@ const list = document.getElementById("list")!;
 const search = document.getElementById("search") as HTMLInputElement;
 const native = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 const problemsEl = document.getElementById("problems")!;
+let confirmResetAll = false;
 
 // Problems with a hand-edited keybindings.json. The listed settings are the last good ones.
 function showProblems(problems: string[]) {
   problemsEl.hidden = problems.length === 0;
-  const broken = problems.some((p) => p.includes("valid JSON") || p.includes("can't be read"));
+  const broken = problems.some((p) => p.startsWith("keybindings.json"));
   problemsEl.innerHTML =
     `<ul>${problems.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>` +
-    (broken ? `<p>Shown below are the last working shortcuts. Changing one here rewrites the file and keeps a copy of it as keybindings.json.bak.</p>` : "");
+    (broken ? `<p>${escapeHtml(t("settings.shortcuts.problemRecovery"))}</p>` : "");
 }
 
 let overrides: Overrides = {};
 let recording: string | null = null; // command id being recorded
-let notice: { id: string; html: string } | null = null; // inline message under a row
+let notice: {
+  id: string;
+  messageKey: string;
+  vars: Record<string, string>;
+  action?: { action: "steal"; labelKey: string; vars: Record<string, string>; key: string; owner: string };
+} | null = null;
 
 const defaults = effectiveKeys({});
-const labelOf = (id: string) => commandDefs.find((c) => c.id === id)?.label ?? id;
+const labelOf = (id: string) => commandDefs.some((c) => c.id === id) ? t(`command.${id}`) : id;
+const reservedLabels: Record<string, string> = {
+  Quit: "reserved.quit", Settings: "reserved.settings", "Hide OpenViewer": "reserved.hide", "Hide Others": "reserved.hideOthers", Minimize: "reserved.minimize",
+  Copy: "reserved.copy", Paste: "reserved.paste", Cut: "reserved.cut", "Select All": "reserved.selectAll",
+  "App Switcher": "reserved.appSwitcher", Spotlight: "reserved.spotlight", "Cycle Windows": "reserved.cycleWindows",
+  Screenshot: "reserved.screenshot", "Screenshot to Clipboard": "reserved.screenshotClipboard", "Lock Screen": "reserved.lockScreen",
+  "Emoji & Symbols": "reserved.emojiSymbols", "Full Screen": "reserved.fullScreen",
+};
+const reservedLabel = (owner: string) => reservedLabels[owner] ? t(reservedLabels[owner]) : owner;
 
 function keycap(shortcut: string) {
-  return shortcut ? `<kbd>${display(shortcut)}</kbd>` : `<span class="prefs-none">None</span>`;
+  return shortcut ? `<kbd>${escapeHtml(display(shortcut))}</kbd>` : `<span class="prefs-none">${escapeHtml(t("settings.shortcuts.none"))}</span>`;
+}
+
+function renderResetAll() {
+  if (confirmResetAll) {
+    resetWrap.innerHTML = `${escapeHtml(t("settings.shortcuts.confirmResetAll"))} <button id="reset-yes" class="prefs-link" type="button">${escapeHtml(t("settings.shortcuts.reset"))}</button>
+      <button id="reset-no" class="prefs-link" type="button">${escapeHtml(t("settings.shortcuts.keep"))}</button>`;
+  } else {
+    resetWrap.innerHTML = `<button id="reset-all" class="prefs-link" type="button">${escapeHtml(t("settings.shortcuts.resetAll"))}</button>`;
+  }
 }
 
 function render() {
@@ -37,31 +62,34 @@ function render() {
   const q = search.value.trim().toLowerCase();
   const groups = new Map<string, typeof commandDefs>();
   for (const def of commandDefs) {
-    const hay = `${def.label} ${def.menu} ${display(keys[def.id])}`.toLowerCase();
+    const command = labelOf(def.id);
+    const menu = t(`menu.${def.menu.toLowerCase()}`);
+    const hay = `${command} ${menu} ${def.label} ${def.menu} ${display(keys[def.id])}`.toLowerCase();
     if (q && !hay.includes(q)) continue;
     groups.set(def.menu, [...(groups.get(def.menu) ?? []), def]);
   }
   list.innerHTML = "";
   if (groups.size === 0) {
-    list.innerHTML = `<p class="prefs-empty">No commands match “${escapeHtml(search.value)}”.</p>`;
+    list.innerHTML = `<p class="prefs-empty">${escapeHtml(t("settings.shortcuts.noCommands", { query: search.value }))}</p>`;
     return;
   }
   for (const [menu, defs] of groups) {
     const section = document.createElement("section");
     section.className = "prefs-group";
-    section.innerHTML = `<h2>${menu}</h2>`;
+    section.innerHTML = `<h2>${escapeHtml(t(`menu.${menu.toLowerCase()}`))}</h2>`;
     for (const def of defs) {
       const custom = keys[def.id] !== defaults[def.id];
       const row = document.createElement("div");
       row.className = "prefs-row" + (recording === def.id ? " is-recording" : "");
       row.dataset.id = def.id;
       row.innerHTML = `
-        <span class="prefs-label">${escapeHtml(def.label)}</span>
-        <button type="button" class="prefs-key" data-action="record" aria-label="Shortcut for ${escapeHtml(def.label)}">
-          ${recording === def.id ? `<span class="prefs-listening">Press shortcut…</span>` : keycap(keys[def.id])}
+        <span class="prefs-label">${escapeHtml(labelOf(def.id))}</span>
+        <button type="button" class="prefs-key" data-action="record" aria-label="${escapeHtml(t("settings.shortcuts.forCommand", { command: labelOf(def.id) }))}">
+          ${recording === def.id ? `<span class="prefs-listening">${escapeHtml(t("settings.shortcuts.listening"))}</span>` : keycap(keys[def.id])}
         </button>
-        <button type="button" class="prefs-reset" data-action="reset" title="Reset to ${display(defaults[def.id]) || "none"}" ${custom ? "" : "hidden"}>↺</button>
-        ${notice?.id === def.id ? `<div class="prefs-notice">${notice.html}</div>` : ""}`;
+        <button type="button" class="prefs-reset" data-action="reset" title="${escapeHtml(t("settings.shortcuts.resetTo", { shortcut: display(defaults[def.id]) || t("settings.shortcuts.none") }))}" ${custom ? "" : "hidden"}>↺</button>
+        ${notice?.id === def.id ? `<div class="prefs-notice"><span>${escapeHtml(t(notice.messageKey, notice.vars))}</span>
+          ${notice.action ? `<button type="button" data-action="steal" data-key="${escapeHtml(notice.action.key)}" data-owner="${escapeHtml(notice.action.owner)}">${escapeHtml(t(notice.action.labelKey, notice.action.vars))}</button><button type="button" data-action="dismiss">${escapeHtml(t("settings.shortcuts.cancel"))}</button>` : ""}</div>` : ""}`;
       section.appendChild(row);
     }
     list.appendChild(section);
@@ -101,9 +129,9 @@ async function assign(id: string, shortcut: string) {
     // Ask before taking a shortcut from another command.
     notice = {
       id,
-      html: `<b>${display(shortcut)}</b> is used by <b>${escapeHtml(labelOf(owner))}</b>.
-        <button type="button" data-action="steal" data-key="${escapeHtml(shortcut)}" data-owner="${owner}">Use for ${escapeHtml(labelOf(id))}</button>
-        <button type="button" data-action="dismiss">Cancel</button>`,
+      messageKey: "settings.shortcuts.inUse",
+      vars: { key: display(shortcut), command: labelOf(owner) },
+      action: { action: "steal", labelKey: "settings.shortcuts.useFor", vars: { command: labelOf(id) }, key: shortcut, owner },
     };
     await stopRecording();
     return;
@@ -127,12 +155,12 @@ window.addEventListener(
     const shortcut = fromEvent(e);
     if (!shortcut) return; // a bare modifier: keep listening
     if (reserved[shortcut]) {
-      notice = { id, html: `<b>${display(shortcut)}</b> is reserved for ${reserved[shortcut]}. Try another.` };
+      notice = { id, messageKey: "settings.shortcuts.reserved", vars: { key: display(shortcut), owner: reservedLabel(reserved[shortcut]) } };
       render();
       return;
     }
     if (!isUsable(shortcut)) {
-      notice = { id, html: `Add ⌘ or ⌃ to <b>${display(shortcut)}</b>, or use an F-key.` };
+      notice = { id, messageKey: "settings.shortcuts.addModifier", vars: { key: display(shortcut) } };
       render();
       return;
     }
@@ -186,11 +214,12 @@ const resetWrap = document.getElementById("reset-all-wrap")!;
 resetWrap.addEventListener("click", async (e) => {
   const action = (e.target as HTMLElement).closest<HTMLButtonElement>("button")?.id;
   if (action === "reset-all") {
-    resetWrap.innerHTML = `Reset every shortcut? <button id="reset-yes" class="prefs-link" type="button">Reset</button>
-      <button id="reset-no" class="prefs-link" type="button">Keep</button>`;
+    confirmResetAll = true;
+    renderResetAll();
   } else if (action === "reset-yes" || action === "reset-no") {
     if (action === "reset-yes") await save({});
-    resetWrap.innerHTML = `<button id="reset-all" class="prefs-link" type="button">Reset all</button>`;
+    confirmResetAll = false;
+    renderResetAll();
   }
 });
 
@@ -239,6 +268,7 @@ for (const tab of tabs) {
   });
 }
 setupImagesPane();
+setupLanguagePane();
 
 void store.load().then((loaded) => {
   overrides = loaded.overrides;
@@ -246,6 +276,19 @@ void store.load().then((loaded) => {
   render();
 });
 render();
+renderResetAll();
+applyTranslations();
+onLanguageChange(() => {
+  void store.load().then((loaded) => {
+    overrides = loaded.overrides;
+    showProblems(loaded.problems);
+    if (!recording) render();
+  });
+  renderResetAll();
+});
 
 // Test hook for the browser build (never in the app).
-if (!native) (window as unknown as { __prefs: unknown }).__prefs = { get overrides() { return overrides; } };
+if (!native) (window as unknown as { __prefs: unknown }).__prefs = {
+  get overrides() { return overrides; },
+  setLanguage,
+};

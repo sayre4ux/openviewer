@@ -9,6 +9,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { setI18nText } from "../shared/i18n";
 import { mathFragment, mathReady, renderMath } from "../render/math";
 import { scrollToAnchor } from "./anchors";
 import { blockPreview, isRenderedBlock, mathCutoff, renderRefreshed } from "./blocks";
@@ -129,7 +130,7 @@ class MathWidget extends WidgetType {
       source.textContent = `$${this.tex}$`;
       const note = document.createElement("span");
       note.className = "cm-md-render-note";
-      note.textContent = result.message;
+      setI18nText(note, result.reason === "too-long" ? "math.tooLong" : result.reason === "too-large" ? "math.tooLarge" : "math.invalid");
       el.append(source, note);
     }
     el.addEventListener("mousedown", (e) => {
@@ -146,14 +147,14 @@ class MathWidget extends WidgetType {
 }
 
 class BlockedImageWidget extends WidgetType {
-  constructor(readonly alt: string, readonly note = "image blocked") {
+  constructor(readonly alt: string, readonly noteKey = "image.blocked", readonly noteVars: Record<string, string> = {}) {
     super();
   }
   eq(other: BlockedImageWidget) {
-    return other.alt === this.alt && other.note === this.note;
+    return other.alt === this.alt && other.noteKey === this.noteKey && JSON.stringify(other.noteVars) === JSON.stringify(this.noteVars);
   }
   toDOM() {
-    return blockedImageNode(this.alt, undefined, this.note);
+    return blockedImageNode(this.alt, undefined, this.noteKey, this.noteVars);
   }
 }
 
@@ -164,7 +165,7 @@ export interface BlockedImage {
 }
 type ResolvedImage = string | null | BlockedImage;
 
-function blockedImageNode(altText: string, offer?: BlockedImage, noteText = "image blocked") {
+function blockedImageNode(altText: string, offer?: BlockedImage, noteKey = "image.blocked", noteVars: Record<string, string> = {}) {
   const el = document.createElement("span");
   el.className = "cm-md-image-blocked";
   if (altText) {
@@ -175,14 +176,14 @@ function blockedImageNode(altText: string, offer?: BlockedImage, noteText = "ima
   }
   const note = document.createElement("span");
   note.className = "cm-md-image-blocked-note";
-  note.textContent = noteText;
+  setI18nText(note, noteKey, noteVars);
   el.appendChild(note);
   if (offer) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "cm-md-image-allow";
     const name = offer.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || offer.folder;
-    button.textContent = `Show images from “${name}”…`;
+    setI18nText(button, "image.allowFolder", { name });
     button.title = offer.folder;
     button.addEventListener("mousedown", (e) => e.preventDefault()); // keep the editor selection where it is
     button.addEventListener("click", () => void offer.allow());
@@ -210,9 +211,9 @@ export function isRemoteImage(raw: string) {
 // The placeholder names the host, so the reader can judge whether to turn remote images on.
 function remoteNote(raw: string) {
   try {
-    return `image from ${new URL(raw.trim()).hostname} not loaded`;
+    return { key: "image.remoteHost", vars: { host: new URL(raw.trim()).hostname } satisfies Record<string, string> };
   } catch {
-    return "remote image not loaded";
+    return { key: "image.remote", vars: {} as Record<string, string> };
   }
 }
 
@@ -456,8 +457,9 @@ function buildDecorations(view: EditorView): DecorationSet {
         const alt = marks.length >= 2 ? doc.sliceString(marks[0].to, marks[1].from) : "";
         if (url) {
           const raw = doc.sliceString(url.from, url.to);
+          const remote = isRemoteImage(raw) && !remoteImages ? remoteNote(raw) : null;
           const widget = !imageUrlAllowed(raw) ? new BlockedImageWidget(alt)
-            : isRemoteImage(raw) && !remoteImages ? new BlockedImageWidget(alt, remoteNote(raw))
+            : remote ? new BlockedImageWidget(alt, remote.key, remote.vars)
             : new ImageWidget(raw, alt, imageResolverVersion);
           out.push(Decoration.replace({ widget }).range(node.from, node.to));
         }

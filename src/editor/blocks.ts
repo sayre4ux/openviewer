@@ -3,9 +3,10 @@ import { type EditorState, type Extension, Prec, type Range, StateEffect, StateF
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import {
-  cachedDiagram, type DiagramResult, diagramGeneration, diagramsEnabled, MAX_DIAGRAMS, renderDiagram,
+  cachedDiagram, type DiagramFailure, type DiagramResult, diagramGeneration, diagramsEnabled, MAX_DIAGRAMS, renderDiagram,
 } from "../render/diagram";
-import { loadMath, MAX_FORMULAS, mathFragment, mathReady, renderMath } from "../render/math";
+import { loadMath, MAX_FORMULAS, mathFragment, mathReady, renderMath, type MathFailure } from "../render/math";
+import { setI18nAttribute, setI18nText } from "../shared/i18n";
 import { displayMathSource } from "./math";
 import { frozenChanged, touches } from "./reveal";
 
@@ -240,7 +241,7 @@ function revealOnClick(view: EditorView, wrap: HTMLElement) {
   });
 }
 
-function failureNode(source: string, message: string) {
+function failureNode(source: string, messageKey: string) {
   const box = document.createElement("div");
   box.className = "cm-md-render-failed";
   const code = document.createElement("pre");
@@ -248,9 +249,21 @@ function failureNode(source: string, message: string) {
   code.textContent = source;
   const note = document.createElement("div");
   note.className = "cm-md-render-note";
-  note.textContent = message;
+  setI18nText(note, messageKey);
   box.append(code, note);
   return box;
+}
+
+function mathFailureKey(reason: MathFailure): string {
+  return reason === "too-long" ? "math.tooLong" : reason === "too-large" ? "math.tooLarge" : "math.invalid";
+}
+
+function diagramFailureKey(reason: DiagramFailure): string {
+  return {
+    off: "diagram.off", "too-long": "diagram.tooLong", "too-large": "diagram.tooLarge",
+    limit: "diagram.limit", syntax: "diagram.syntax", unsupported: "diagram.unsupported",
+    "unsafe-output": "diagram.unsafeOutput", timeout: "diagram.timeout", blocked: "diagram.blocked",
+  }[reason];
 }
 
 const sameFrame = (a: Block, b: Block) =>
@@ -275,7 +288,7 @@ class DisplayMathWidget extends WidgetType {
       box.appendChild(mathFragment(result));
       inner.appendChild(box);
     } else {
-      inner.appendChild(failureNode(`$$\n${this.block.source}\n$$`, result.message));
+      inner.appendChild(failureNode(`$$\n${this.block.source}\n$$`, mathFailureKey(result.reason)));
     }
     revealOnClick(view, wrap);
     return wrap;
@@ -308,19 +321,19 @@ class DiagramWidget extends WidgetType {
       if (result.ok && result.dataUrl.startsWith("data:image/svg+xml;base64,")) {
         const img = document.createElement("img");
         img.className = "cm-md-diagram-image";
-        img.alt = "Mermaid diagram";
-        img.addEventListener("error", () => box.replaceChildren(failureNode(source, "the diagram's image couldn't be shown")), { once: true });
+        setI18nAttribute(img, "alt", "block.mermaidAlt");
+        img.addEventListener("error", () => box.replaceChildren(failureNode(source, "block.imageFailed")), { once: true });
         img.width = result.width;
         img.height = result.height;
         img.src = result.dataUrl;
         box.replaceChildren(img);
       } else if (!result.ok) {
-        const failed = failureNode(source, result.message);
+        const failed = failureNode(source, diagramFailureKey(result.reason));
         if (result.reason === "blocked") {
           const button = document.createElement("button");
           button.type = "button";
           button.className = "cm-md-render-anyway";
-          button.textContent = "Render anyway";
+          setI18nText(button, "block.renderAnyway");
           button.addEventListener("mousedown", (e) => e.preventDefault()); // keep the editor selection
           button.addEventListener("click", () => {
             box.replaceChildren(pendingNode());
@@ -350,7 +363,7 @@ class DiagramWidget extends WidgetType {
 function pendingNode() {
   const note = document.createElement("div");
   note.className = "cm-md-diagram-pending";
-  note.textContent = "Rendering diagram…";
+  setI18nText(note, "block.rendering");
   return note;
 }
 

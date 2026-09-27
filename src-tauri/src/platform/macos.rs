@@ -11,6 +11,8 @@ use std::{
   sync::atomic::{AtomicU64, Ordering},
 };
 
+use crate::i18n;
+
 use super::{path_name, EXISTS};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -19,7 +21,7 @@ fn fd_path(fd: RawFd) -> Result<PathBuf, String> {
   let mut buf = vec![0u8; libc::MAXPATHLEN as usize];
   let rc = unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr().cast::<libc::c_char>()) };
   if rc == -1 { return Err(std::io::Error::last_os_error().to_string()); }
-  let len = buf.iter().position(|b| *b == 0).ok_or_else(|| "couldn't read the opened path".to_string())?;
+  let len = buf.iter().position(|b| *b == 0).ok_or_else(|| i18n::t("error.file.openedPath"))?;
   Ok(PathBuf::from(OsStr::from_bytes(&buf[..len])))
 }
 
@@ -40,7 +42,9 @@ pub fn open_for_read(path: &Path) -> Result<fs::File, String> {
     .map_err(|e| e.to_string())?;
   let opened = fd_path(file.as_raw_fd())?;
   if !same_opened_file(path, &opened) {
-    return Err(format!("{} changed while opening (opened {}, expected {})", path_name(path), opened.display(), path.display()));
+    return Err(i18n::t_with("error.file.openedChanged", &[
+      ("name", &path_name(path)), ("opened", &opened.display().to_string()), ("expected", &path.display().to_string()),
+    ]));
   }
   Ok(file)
 }
@@ -52,7 +56,7 @@ fn copy_metadata_fd(from: &fs::File, to: &fs::File) -> Result<(), String> {
   let err = std::io::Error::last_os_error();
   // Volumes without ACLs or extended attributes (FAT, some network shares) have none to lose.
   if matches!(err.raw_os_error(), Some(libc::ENOTSUP) | Some(libc::EOPNOTSUPP)) { return Ok(()) }
-  Err(format!("couldn't copy file metadata: {err}"))
+  Err(i18n::t_with("error.file.metadataCopy", &[("error", &err.to_string())]))
 }
 
 fn open_existing(dirfd: libc::c_int, name: &CStr) -> Result<Option<fs::File>, String> {
@@ -67,7 +71,7 @@ fn create_temp(dirfd: libc::c_int, name: &OsStr) -> Result<(CString, fs::File), 
   loop {
     let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
     let temp_name = format!(".{}.openviewer-{}-{id}.tmp", name.to_string_lossy(), std::process::id());
-    let temp_c = CString::new(temp_name).map_err(|_| "Invalid file path".to_string())?;
+    let temp_c = CString::new(temp_name).map_err(|_| i18n::t("error.file.invalidPath"))?;
     // O_CLOEXEC: don't leak the temp fd across exec. O_NOFOLLOW: the name must be the new file, not a link.
     let fd = unsafe {
       libc::openat(dirfd, temp_c.as_ptr(), libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o666 as libc::c_int)
@@ -93,18 +97,20 @@ pub fn create_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
 
 fn write_via_temp(target: &Path, bytes: &[u8], exclusive: bool) -> Result<(), String> {
   let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("/"));
-  let name = target.file_name().ok_or_else(|| "Invalid file path".to_string())?;
+  let name = target.file_name().ok_or_else(|| i18n::t("error.file.invalidPath"))?;
   let dir = OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW).open(parent).map_err(|e| e.to_string())?;
   let opened_parent = fd_path(dir.as_raw_fd())?;
   if opened_parent != parent {
-    return Err(format!("the folder changed while saving (opened {}, expected {})", opened_parent.display(), parent.display()));
+    return Err(i18n::t_with("error.file.folderChanged", &[
+      ("opened", &opened_parent.display().to_string()), ("expected", &parent.display().to_string()),
+    ]));
   }
   let dirfd = dir.as_raw_fd();
-  let name_c = CString::new(name.as_bytes()).map_err(|_| "Invalid file path".to_string())?;
+  let name_c = CString::new(name.as_bytes()).map_err(|_| i18n::t("error.file.invalidPath"))?;
   let existing = if exclusive { None } else { open_existing(dirfd, &name_c)? };
   if let Some(existing) = &existing {
     let meta = existing.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() { return Err(format!("{} is not a regular file", path_name(target))); }
+    if !meta.is_file() { return Err(i18n::t_with("error.document.notRegular", &[("name", &path_name(target))])); }
   }
   let (temp_c, mut file) = create_temp(dirfd, name)?;
   let result = (|| {

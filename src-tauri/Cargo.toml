@@ -33,7 +33,7 @@ getrandom = "0.3"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKWebpagePreferences", "WKNavigation", "objc2-app-kit"] }
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSLocale", "NSString", "NSURL", "NSValue"] }
 objc2-app-kit = { version = "0.3", features = ["NSPrintOperation", "NSPrintInfo", "NSView", "NSResponder", "NSGraphics", "NSWindow"] }
 
 [target.'cfg(unix)'.dependencies]

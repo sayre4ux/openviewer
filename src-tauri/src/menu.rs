@@ -17,11 +17,12 @@ use tauri::{
   AppHandle, Emitter, Manager, Runtime,
 };
 
+use crate::i18n;
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandDef {
   id: String,
-  label: String,
   menu: String,
   key: String,
   #[serde(default)]
@@ -88,6 +89,30 @@ fn usable(shortcut: &str) -> bool {
   is_fkey(parts.last().copied().unwrap_or("")) || parts.contains(&"Cmd") || parts.contains(&"Ctrl")
 }
 
+fn reserved_owner(owner: &str) -> String {
+  let key = match owner {
+    "Quit" => "reserved.quit",
+    "Settings" => "reserved.settings",
+    "Hide OpenViewer" => "reserved.hide",
+    "Hide Others" => "reserved.hideOthers",
+    "Minimize" => "reserved.minimize",
+    "Copy" => "reserved.copy",
+    "Paste" => "reserved.paste",
+    "Cut" => "reserved.cut",
+    "Select All" => "reserved.selectAll",
+    "App Switcher" => "reserved.appSwitcher",
+    "Spotlight" => "reserved.spotlight",
+    "Cycle Windows" => "reserved.cycleWindows",
+    "Screenshot" => "reserved.screenshot",
+    "Screenshot to Clipboard" => "reserved.screenshotClipboard",
+    "Lock Screen" => "reserved.lockScreen",
+    "Emoji & Symbols" => "reserved.emojiSymbols",
+    "Full Screen" => "reserved.fullScreen",
+    _ => return owner.to_string(),
+  };
+  i18n::t(key)
+}
+
 // Keep only known commands with well-formed, usable, unreserved shortcuts ("" = no shortcut).
 // Returns the clean overrides and a note for each entry that was dropped.
 pub fn sanitize(raw: &serde_json::Value) -> (HashMap<String, String>, Vec<String>) {
@@ -96,22 +121,25 @@ pub fn sanitize(raw: &serde_json::Value) -> (HashMap<String, String>, Vec<String
   let mut out = HashMap::new();
   let mut notes = Vec::new();
   let Some(map) = raw.as_object() else {
-    return (out, vec!["keybindings.json must be a JSON object".into()]);
+    return (out, vec![i18n::t("keybindings.notObject")]);
   };
   for (id, value) in map {
+    let known = defs.iter().find(|def| &def.id == id);
+    let shown_id = known.map(|def| i18n::t(&format!("command.{}", def.id))).unwrap_or_else(|| id.clone());
     let Some(v) = value.as_str() else {
-      notes.push(format!("{id}: the shortcut must be a string"));
+      notes.push(i18n::t_with("keybindings.valueNotString", &[("id", &shown_id)]));
       continue;
     };
     let v = &canonical(v);
-    if !defs.iter().any(|d| &d.id == id) {
-      notes.push(format!("{id}: unknown command"));
+    if known.is_none() {
+      notes.push(i18n::t_with("keybindings.unknownCommand", &[("id", id)]));
     } else if !v.is_empty() && to_accelerator(v).is_none() {
-      notes.push(format!("{id}: \"{v}\" is not a shortcut"));
+      notes.push(i18n::t_with("keybindings.invalidShortcut", &[("id", &shown_id), ("key", v)]));
     } else if !v.is_empty() && !usable(v) {
-      notes.push(format!("{id}: \"{v}\" needs Cmd or Ctrl"));
+      notes.push(i18n::t_with("keybindings.needsModifier", &[("id", &shown_id), ("key", v)]));
     } else if let Some(owner) = reserved.get(v) {
-      notes.push(format!("{id}: \"{v}\" is reserved for {owner}"));
+      let owner = reserved_owner(owner);
+      notes.push(i18n::t_with("keybindings.reserved", &[("id", &shown_id), ("key", v), ("owner", &owner)]));
     } else {
       out.insert(id.clone(), v.to_string());
     }
@@ -122,7 +150,8 @@ pub fn sanitize(raw: &serde_json::Value) -> (HashMap<String, String>, Vec<String
     let mut key = out.get(&def.id).cloned().unwrap_or_else(|| def.key.clone());
     if !key.is_empty() && seen.contains(&key) {
       if out.remove(&def.id).is_some() {
-        notes.push(format!("{}: \"{key}\" is already used by another command", def.id));
+        let label = i18n::t(&format!("command.{}", def.id));
+        notes.push(i18n::t_with("keybindings.duplicate", &[("id", &label), ("key", &key)]));
       }
       key = def.key.clone();
       if !key.is_empty() && seen.contains(&key) {
@@ -165,9 +194,9 @@ fn backup_path(path: &Path) -> PathBuf {
 fn ensure_plain_file(path: &Path, label: &str) -> Result<(), String> {
   match fs::symlink_metadata(path) {
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-    Err(e) => Err(format!("{label} can't be used: {e}")),
-    Ok(meta) if meta.file_type().is_symlink() => Err(format!("{label} is a symbolic link and will not be followed")),
-    Ok(meta) if !meta.file_type().is_file() => Err(format!("{label} is not a regular file")),
+    Err(e) => Err(i18n::t_with("keybindings.cannotUse", &[("name", label), ("error", &e.to_string())])),
+    Ok(meta) if meta.file_type().is_symlink() => Err(i18n::t_with("keybindings.symlink", &[("name", label)])),
+    Ok(meta) if !meta.file_type().is_file() => Err(i18n::t_with("keybindings.notRegular", &[("name", label)])),
     Ok(_) => Ok(()),
   }
 }
@@ -183,20 +212,20 @@ fn read_file(path: &Path) -> Result<Option<(HashMap<String, String>, Vec<String>
   let meta = match fs::symlink_metadata(path) {
     Ok(meta) => meta,
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-    Err(e) => return Err(format!("keybindings.json can't be read: {e}")),
+    Err(e) => return Err(i18n::t_with("keybindings.readFailed", &[("error", &e.to_string())])),
   };
   if meta.len() > KEYBINDINGS_LIMIT {
-    return Err("keybindings.json is too large (the limit is 1 MB)".into());
+    return Err(i18n::t("keybindings.tooLarge"));
   }
   // The plain-file check above can lose a race with a swapped symlink; open_for_read can't.
-  let file = crate::platform::open_for_read(path).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
+  let file = crate::platform::open_for_read(path).map_err(|e| i18n::t_with("keybindings.readFailed", &[("error", &e)]))?;
   let mut buf = Vec::new();
-  file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| format!("keybindings.json can't be read: {e}"))?;
+  file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| i18n::t_with("keybindings.readFailed", &[("error", &e.to_string())]))?;
   if buf.len() as u64 > KEYBINDINGS_LIMIT {
-    return Err("keybindings.json is too large (the limit is 1 MB)".into());
+    return Err(i18n::t("keybindings.tooLarge"));
   }
-  let text = String::from_utf8(buf).map_err(|_| "keybindings.json can't be read: invalid UTF-8".to_string())?;
-  let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("keybindings.json isn't valid JSON: {e}"))?;
+  let text = String::from_utf8(buf).map_err(|_| i18n::t("keybindings.invalidUtf8"))?;
+  let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| i18n::t_with("keybindings.invalidJson", &[("error", &e.to_string())]))?;
   Ok(Some(sanitize(&value)))
 }
 
@@ -229,8 +258,23 @@ fn take_file<R: Runtime>(app: &AppHandle<R>, path: &PathBuf) {
 
 fn publish<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
   let state = state_of(app);
-  app.set_menu(build(app, &state.overrides, false).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+  rebuild(app).map_err(|error| error.to_string())?;
   app.emit("keybindings-changed", state).map_err(|e| e.to_string())
+}
+
+pub fn rebuild<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+  let state = state_of(app);
+  app.set_menu(build(app, &state.overrides, false)?)?;
+  if let Some(window) = app.get_webview_window("preferences") {
+    let title = i18n::t("settings.title");
+    let _ = window.set_title(&title);
+  }
+  Ok(())
+}
+
+pub fn refresh_localized<R: Runtime>(app: &AppHandle<R>) {
+  if let Ok(path) = file_path(app) { take_file(app, &path); }
+  let _ = publish(app);
 }
 
 pub fn load<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -262,14 +306,14 @@ pub fn get_keybindings<R: Runtime>(app: AppHandle<R>) -> KeybindingState {
 }
 
 fn backup_keybindings(src: &Path, dest: &Path) -> Result<(), String> {
-  let file = crate::platform::open_for_read(src).map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
+  let file = crate::platform::open_for_read(src).map_err(|e| i18n::t_with("keybindings.backupFailed", &[("error", &e)]))?;
   let mut buf = Vec::new();
   // Never copy more than the limit, even if the file grew after the size check.
-  file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| format!("couldn't back up keybindings.json: {e}"))?;
+  file.take(KEYBINDINGS_LIMIT + 1).read_to_end(&mut buf).map_err(|e| i18n::t_with("keybindings.backupFailed", &[("error", &e.to_string())]))?;
   if buf.len() as u64 > KEYBINDINGS_LIMIT {
-    return Err("keybindings.json is too large (the limit is 1 MB). Move the file aside before saving shortcuts".into());
+    return Err(i18n::t("keybindings.moveAside"));
   }
-  crate::documents::write_regular_file(dest, &buf).map_err(|e| format!("couldn't back up keybindings.json: {e}"))
+  crate::documents::write_regular_file(dest, &buf).map_err(|e| i18n::t_with("keybindings.backupFailed", &[("error", &e)]))
 }
 
 // A hand-edited file that doesn't parse is kept beside the new one, unless copying it would
@@ -281,7 +325,7 @@ fn save_keybindings_file(path: &Path, clean: &HashMap<String, String>) -> Result
   guard_keybindings(path)?;
   if let Err(err) = read_file(path) {
     if err.contains("too large") {
-      return Err(format!("{err}. Move the file aside before saving shortcuts"));
+      return Err(i18n::t_with("keybindings.moveAsideSuffix", &[("error", &err)]));
     }
     backup_keybindings(path, &backup_path(path))?;
   }
@@ -331,7 +375,7 @@ pub fn open_preferences<R: Runtime>(app: &AppHandle<R>) {
     return;
   }
   let _ = WebviewWindowBuilder::new(app, "preferences", tauri::WebviewUrl::App("preferences.html".into()))
-    .title("Settings")
+    .title(i18n::t("settings.title"))
     .inner_size(640.0, 620.0)
     .min_inner_size(520.0, 420.0)
     .build();
@@ -347,17 +391,19 @@ fn build<R: Runtime>(app: &AppHandle<R>, overrides: &HashMap<String, String>, su
   };
   let item = |def: &CommandDef| -> tauri::Result<Box<dyn IsMenuItem<R>>> {
     let key = accel(def);
+    let label = i18n::t(&format!("command.{}", def.id));
     Ok(if def.check {
       let on = app.state::<Keybindings>().checks.lock().unwrap().get(&def.id).copied().unwrap_or(false);
-      let b = CheckMenuItemBuilder::with_id(&def.id, &def.label).checked(on);
+      let b = CheckMenuItemBuilder::with_id(&def.id, label).checked(on);
       Box::new(match key { Some(k) => b.accelerator(k).build(app)?, None => b.build(app)? })
     } else {
-      let b = MenuItemBuilder::with_id(&def.id, &def.label);
+      let b = MenuItemBuilder::with_id(&def.id, label);
       Box::new(match key { Some(k) => b.accelerator(k).build(app)?, None => b.build(app)? })
     })
   };
   let submenu = |name: &str| -> tauri::Result<Submenu<R>> {
-    let mut sub = SubmenuBuilder::new(app, name);
+    let title = i18n::t(&format!("menu.{}", name.to_lowercase()));
+    let mut sub = SubmenuBuilder::new(app, title);
     let mut first = true;
     for def in defs.iter().filter(|d| d.menu == name) {
       if name == "Edit" && def.after_clipboard {
@@ -370,18 +416,35 @@ fn build<R: Runtime>(app: &AppHandle<R>, overrides: &HashMap<String, String>, su
     sub.build()
   };
 
-  let app_menu = SubmenuBuilder::new(app, "OpenViewer")
-    .about(Some(tauri::menu::AboutMetadata { name: Some("OpenViewer".into()), ..Default::default() }))
+  let app_name = i18n::t("menu.app");
+  let about = i18n::t("menu.about");
+  let services = i18n::t("menu.services");
+  let updates = i18n::t("menu.checkUpdates");
+  let settings = i18n::t("menu.settings");
+  let hide = i18n::t("menu.hide");
+  let hide_others = i18n::t("menu.hideOthers");
+  let show_all = i18n::t("menu.showAll");
+  let quit = i18n::t("menu.quit");
+  let close = i18n::t("menu.close");
+  let minimize = i18n::t("menu.minimize");
+  let zoom = i18n::t("menu.zoom");
+  let app_menu = SubmenuBuilder::new(app, app_name)
+    .item(&PredefinedMenuItem::about(app, Some(&about), Some(tauri::menu::AboutMetadata { name: Some("OpenViewer".into()), ..Default::default() }))?)
     .separator()
-    .item(&MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(app)?)
-    .item(&MenuItemBuilder::with_id("preferences", "Settings…").accelerator("CmdOrCtrl+Comma").build(app)?)
+    .item(&MenuItemBuilder::with_id("check-for-updates", updates).build(app)?)
+    .item(&MenuItemBuilder::with_id("preferences", settings).accelerator("CmdOrCtrl+Comma").build(app)?)
     .separator()
-    .hide().hide_others().show_all().separator()
-    .item(&MenuItemBuilder::with_id("quit", "Quit OpenViewer").accelerator("CmdOrCtrl+Q").build(app)?)
+    .item(&PredefinedMenuItem::services(app, Some(&services))?)
+    .item(&PredefinedMenuItem::hide(app, Some(&hide))?)
+    .item(&PredefinedMenuItem::hide_others(app, Some(&hide_others))?)
+    .item(&PredefinedMenuItem::show_all(app, Some(&show_all))?)
+    .separator()
+    .item(&MenuItemBuilder::with_id("quit", quit).accelerator("CmdOrCtrl+Q").build(app)?)
     .build()?;
-  let window = SubmenuBuilder::new(app, "Window")
-    .item(&PredefinedMenuItem::minimize(app, None)?)
-    .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
+  let window = SubmenuBuilder::new(app, i18n::t("menu.window"))
+    .item(&PredefinedMenuItem::minimize(app, Some(&minimize))?)
+    .item(&PredefinedMenuItem::maximize(app, Some(&zoom))?)
+    .item(&PredefinedMenuItem::close_window(app, Some(&close))?)
     .build()?;
   let menus = [
     app_menu,

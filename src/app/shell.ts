@@ -3,6 +3,7 @@ import { imageUrlAllowed, isRemoteImage, remoteImagesAllowed, setImageResolver, 
 import { setDiagramsEnabled } from "../render/diagram";
 import { lineEndings } from "./document";
 import { pastedImageName } from "./imageNames";
+import { onLanguageChange, setLanguage, t } from "../shared/i18n";
 
 export interface ShellDocument {
   getText(): string;
@@ -34,8 +35,6 @@ export interface ShellDocument {
 type Resolution = { status: "ok"; url: string } | { status: "blocked"; folder: string | null };
 // Rust prefixes save errors with this when the file's encoding can't hold some characters.
 const UNMAPPABLE = "unmappable:";
-const SAVE = "Save";
-const DISCARD = "Don’t Save";
 
 // After Save, close only when the document is still clean. Typing during the write leaves it
 // dirty; ask again instead of closing over those keystrokes. A failed save does not close.
@@ -47,11 +46,11 @@ export async function resolveClose(
   for (;;) {
     if (!isDirty()) return true;
     const result = await ask();
-    if (result === SAVE || result === "Yes") {
+    if ([t("command.save"), "Save", "Yes"].includes(result)) {
       if (!await save()) return false;
       continue;
     }
-    return result === DISCARD || result === "No";
+    return [t("dialog.dontSave"), "Don’t Save", "Don't Save", "No"].includes(result);
   }
 }
 
@@ -124,10 +123,11 @@ export async function startShell(
   let closing = false;
 
   const title = () => {
-    const name = path?.split(/[\\/]/).pop() || "Untitled";
+    const name = path?.split(/[\\/]/).pop() || t("app.untitled");
     void win.setTitle(`${doc.isDirty() ? "• " : ""}${name}`);
   };
   doc.onChange(title);
+  onLanguageChange(title);
   // `as` overrides the file's encoding for this write; it becomes the document's only if the write succeeds.
   const saveTo = async (target: string, as?: { encoding: string; bom: boolean }): Promise<boolean> => {
     // Taken before the await: keystrokes during a slow write must stay unsaved.
@@ -147,22 +147,23 @@ export async function startShell(
       const text = String(error);
       if (text.startsWith(UNMAPPABLE)) {
         // The file's encoding (e.g. Big5) can't hold something that was typed: offer UTF-8 instead.
-        const choice = await message(`${text.slice(UNMAPPABLE.length)} Save “${target.split(/[\\/]/).pop()}” as UTF-8 instead?`, {
-          title: "Can’t Save in This Encoding", kind: "warning", buttons: { ok: "Save as UTF-8", cancel: "Cancel" },
+        const saveAsUtf8 = t("dialog.saveAsUtf8.button");
+        const choice = await message(t("dialog.saveAsUtf8", { reason: text.slice(UNMAPPABLE.length), name: target.split(/[\\/]/).pop() ?? "" }), {
+          title: t("dialog.cannotSaveEncoding.title"), kind: "warning", buttons: { ok: saveAsUtf8, cancel: t("dialog.cancel") },
         });
-        if (choice !== "Save as UTF-8" && choice !== "Ok") return false;
+        if (choice !== saveAsUtf8 && choice !== "Save as UTF-8" && choice !== "Ok") return false;
         return saveTo(target, UTF8);
       }
-      await message(text, { title: "Couldn’t save document", kind: "error" });
+      await message(text, { title: t("dialog.saveError.title"), kind: "error" });
       return false;
     }
   };
   const saveAs = async (): Promise<boolean> => {
     let target: string | null;
     try {
-      target = await call<string | null>("save_dialog", { defaultPath: path || "Untitled.md" });
+      target = await call<string | null>("save_dialog", { defaultPath: path || `${t("app.untitled")}.md` });
     } catch (error) {
-      await message(String(error), { title: "Couldn’t save document", kind: "error" });
+      await message(String(error), { title: t("dialog.saveError.title"), kind: "error" });
       return false;
     }
     return target ? saveTo(target) : false;
@@ -178,30 +179,31 @@ export async function startShell(
       title();
       if (!file.exact) {
         await message(
-          `This file is in ${file.encoding}, and some of its bytes can't be written back exactly. Saving may change them.`,
-          { title: "Text Encoding", kind: "warning" },
+          t("dialog.encoding.message", { encoding: file.encoding }),
+          { title: t("dialog.encoding.title"), kind: "warning" },
         );
       }
     } catch (error) {
-      await message(String(error), { title: "Couldn’t open document", kind: "error" });
+      await message(String(error), { title: t("dialog.openError.title"), kind: "error" });
       return;
     }
     // DECISION: once per open, not once per session. Every mixed file gets this sentence,
     // including a CR/LF mix, because those are saved as LF too.
     if (lineEndings(text) === "mixed") {
       await message(
-        "This file mixes Windows (CRLF) and Unix (LF) line endings. OpenViewer will save it with LF line endings.",
-        { title: "Mixed Line Endings", kind: "warning" },
+        t("dialog.mixedLines.message"),
+        { title: t("dialog.mixedLines.title"), kind: "warning" },
       );
     }
   };
   // Images need the document's folder, so an Untitled document is saved first (with the user's OK).
   const documentForImages = async (): Promise<string | null> => {
     if (path) return path;
-    const choice = await message("Save this document first, so the image can be stored in a folder next to it.", {
-      title: "Save Before Adding Images", kind: "info", buttons: { ok: "Save…", cancel: "Cancel" },
+    const save = t("dialog.save.button");
+    const choice = await message(t("dialog.saveBeforeImages.message"), {
+      title: t("dialog.saveBeforeImages.title"), kind: "info", buttons: { ok: save, cancel: t("dialog.cancel") },
     });
-    if (choice !== "Save…" && choice !== "Ok") return null;
+    if (choice !== save && choice !== "Save…" && choice !== "Ok") return null;
     return (await saveAs()) ? path : null;
   };
   const insertImages = async (files: File[]) => {
@@ -217,7 +219,7 @@ export async function startShell(
         });
         links.push(inserted.markdown);
       } catch (error) {
-        await message(String(error), { title: "Couldn’t add the image", kind: "error" });
+        await message(String(error), { title: t("dialog.addImageError.title"), kind: "error" });
       }
     }
     if (links.length) doc.insertImages(links.join(" "));
@@ -233,7 +235,7 @@ export async function startShell(
     try {
       selected = await call<string | null>("open_dialog");
     } catch (error) {
-      await message(String(error), { title: "Couldn’t open document", kind: "error" });
+      await message(String(error), { title: t("dialog.openError.title"), kind: "error" });
       return;
     }
     if (typeof selected === "string") await openPath(selected);
@@ -241,8 +243,10 @@ export async function startShell(
   const askToClose = (): Promise<boolean> => resolveClose(
     () => doc.isDirty(),
     // With custom buttons the dialog resolves to the clicked button's label.
-    () => message(`Do you want to save the changes you made to ${path?.split(/[\\/]/).pop() || "Untitled"}?`, {
-      title: "Unsaved Changes", kind: "warning", buttons: { yes: SAVE, no: DISCARD, cancel: "Cancel" },
+    () => message(t("dialog.unsaved.message", { name: path?.split(/[\\/]/).pop() || t("app.untitled") }), {
+      title: t("dialog.unsaved.title"), kind: "warning", buttons: {
+        yes: t("command.save"), no: t("dialog.dontSave"), cancel: t("dialog.cancel"),
+      },
     }),
     () => save(),
   );
@@ -252,8 +256,9 @@ export async function startShell(
   // exists for the day Mermaid has a flaw with no fix); read first too, so a diagram never renders
   // when they're off.
   // Only a change to one of these re-renders; the folder setting doesn't affect them.
-  type RenderSettings = { remoteImages?: boolean; diagrams?: boolean };
+  type RenderSettings = { remoteImages?: boolean; diagrams?: boolean; resolvedLanguage?: string };
   const applySettings = (s: RenderSettings) => {
+    if (s.resolvedLanguage) setLanguage(s.resolvedLanguage);
     if (setRemoteImages(null, s.remoteImages === true)) doc.refreshImages();
     if (setDiagramsEnabled(s.diagrams !== false)) doc.refreshRendering();
   };
@@ -280,7 +285,7 @@ export async function startShell(
         folder: r.folder,
         allow: async () => {
           const ok = await call<boolean>("allow_image_folder", { documentPath, source: candidate }).catch(async (error) => {
-            await message(String(error), { title: "Couldn’t show images", kind: "error" });
+            await message(String(error), { title: t("dialog.showImagesError.title"), kind: "error" });
             return false;
           });
           if (ok) doc.refreshImages();
@@ -297,7 +302,7 @@ export async function startShell(
     if (exporting) return;
     exporting = true;
     try {
-      const name = path?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, "") || "Untitled";
+      const name = path?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, "") || t("app.untitled");
       const target = await call<string | null>("export_dialog", { format, defaultPath: path ?? `${name}.md` });
       if (!target) return;
       const { renderExport, loadFonts, imageDataUrl } = await import("../export/render");
@@ -319,7 +324,7 @@ export async function startShell(
       });
       await call(format === "pdf" ? "export_pdf" : "export_html", { path: target, html });
     } catch (error) {
-      await message(String(error), { title: "Couldn’t export", kind: "error" });
+      await message(String(error), { title: t("dialog.exportError.title"), kind: "error" });
     } finally {
       exporting = false;
     }
@@ -388,7 +393,7 @@ export async function startShell(
       try {
         links.push((await call<{ markdown: string }>("insert_dropped_image", { documentPath, source })).markdown);
       } catch (error) {
-        await message(String(error), { title: "Couldn’t add the image", kind: "error" });
+        await message(String(error), { title: t("dialog.addImageError.title"), kind: "error" });
       }
     }
     if (links.length) doc.insertImages(links.join(" "), at);
@@ -417,7 +422,7 @@ export async function startShell(
     const [target, anchor = ""] = href.split("#", 2);
     if (!path || !/\.(md|markdown|mdown|txt)>?$/i.test(target)) return;
     call("open_linked_document", { documentPath: path, target, anchor: anchor || null })
-      .catch((error) => message(String(error), { title: "Couldn’t open link", kind: "warning" }));
+      .catch((error) => message(String(error), { title: t("dialog.openLinkError.title"), kind: "warning" }));
   });
   for (const pending of await call<string[]>("frontend_ready")) await openPath(pending);
   // Opened by File → Open while no document window existed.

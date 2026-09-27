@@ -1,4 +1,5 @@
 import type { EditorView } from "@codemirror/view";
+import { getLanguage, onLanguageChange, setI18nAttribute, t } from "../shared/i18n";
 
 // Word count in the bottom-right corner. CJK characters count one word each, as Typora does;
 // link and image targets and HTML tags are not counted.
@@ -13,7 +14,8 @@ export function countWords(text: string) {
   return cjkCount + latin;
 }
 
-const format = (n: number) => n.toLocaleString("en-US");
+const locale = () => getLanguage() === "zh-Hant" ? "zh-Hant-HK" : getLanguage();
+const format = (n: number) => new Intl.NumberFormat(locale()).format(n);
 
 // `prefix` names something about the file worth seeing next to the count (a non-UTF-8 encoding).
 export function createWordCount(el: HTMLElement, prefix: () => string = () => "") {
@@ -24,19 +26,30 @@ export function createWordCount(el: HTMLElement, prefix: () => string = () => ""
   const show = () => {
     if (!view) return;
     const sel = view.state.selection.main;
-    const label = total === 1 ? "word" : "words";
-    const count = sel.empty
-      ? `${format(total)} ${label}`
-      : `${format(countWords(view.state.sliceDoc(sel.from, sel.to)))} of ${format(total)} ${label}`;
+    const cjkDisplay = getLanguage() !== "en";
+    const selected = format(countWords(view.state.sliceDoc(sel.from, sel.to)));
+    const formattedTotal = format(total);
+    const count = cjkDisplay
+      ? sel.empty
+        ? t("wordCount.cjk", { count: formattedTotal })
+        : t("wordCount.cjkSelected", { selected, total: formattedTotal })
+      : sel.empty
+        ? t(total === 1 ? "wordCount.one" : "wordCount.other", { count: formattedTotal })
+        : t(total === 1 ? "wordCount.selectedOne" : "wordCount.selectedOther", { selected, total: formattedTotal });
     const note = prefix();
     el.textContent = note ? `${note} · ${count}` : count;
-    el.title = `${format(view.state.doc.length)} characters · about ${Math.max(1, Math.round(total / 230))} min read`;
+    setI18nAttribute(el, "title", "wordCount.title", {
+      characters: format(view.state.doc.length),
+      minutes: Math.max(1, Math.round(total / 230)),
+    });
   };
   const recount = () => {
     if (!view) return;
     total = countWords(view.state.sliceDoc());
     show();
   };
+
+  onLanguageChange(() => show());
 
   return {
     attach(v: EditorView) {

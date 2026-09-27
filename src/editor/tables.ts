@@ -3,6 +3,7 @@ import { syntaxTree } from "@codemirror/language";
 import { type ChangeSpec, type EditorState, Prec, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { setI18nAttribute, setI18nText } from "../shared/i18n";
 import { fromEvent } from "../shared/keys";
 
 // GFM tables render as an editable <table>, as in Typora. Each cell is its own small editor:
@@ -740,22 +741,24 @@ class TableWidget extends WidgetType {
   private toolbar(view: EditorView, wrap: HTMLElement) {
     const bar = document.createElement("div");
     bar.className = "cm-md-table-tools";
-    const buttons: [op: string, label: string, title: string][] = [
-      ["align-left", "⇤", "Align column left"],
-      ["align-center", "↔", "Align column center"],
-      ["align-right", "⇥", "Align column right"],
-      ["row-below", "+ Row", "Add row below (⌘↩)"],
-      ["row-delete", "− Row", "Delete row"],
-      ["col-right", "+ Col", "Add column right"],
-      ["col-delete", "− Col", "Delete column"],
-      ["tidy", "Tidy", "Line up the table's columns in the Markdown source"],
-      ["delete-table", "Delete", "Delete table"],
+    const buttons: [op: string, label: string, titleKey: string, labelKey?: string][] = [
+      ["align-left", "⇤", "table.alignLeft"],
+      ["align-center", "↔", "table.alignCenter"],
+      ["align-right", "⇥", "table.alignRight"],
+      ["row-below", "+ Row", "table.addRowTitle", "table.addRow"],
+      ["row-delete", "− Row", "table.deleteRowTitle", "table.deleteRow"],
+      ["col-right", "+ Col", "table.addColumnTitle", "table.addColumn"],
+      ["col-delete", "− Col", "table.deleteColumnTitle", "table.deleteColumn"],
+      ["tidy", "Tidy", "table.tidyTitle", "table.tidy"],
+      ["delete-table", "Delete", "table.deleteTitle", "table.delete"],
     ];
-    for (const [op, label, title] of buttons) {
+    for (const [op, label, titleKey, labelKey] of buttons) {
       const b = document.createElement("button");
       b.type = "button";
-      b.textContent = label;
-      b.title = title;
+      if (labelKey) setI18nText(b, labelKey);
+      else b.textContent = label;
+      setI18nAttribute(b, "title", titleKey);
+      setI18nAttribute(b, "aria-label", titleKey);
       // mousedown, not click: keep focus (and so the active cell) until the edit runs.
       b.addEventListener("mousedown", (e) => {
         e.preventDefault();

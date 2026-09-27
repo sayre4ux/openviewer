@@ -1,6 +1,7 @@
 import type { Config, DOMPurify } from "dompurify";
 import type Katex from "katex";
 import { loads } from "./loads";
+import { t } from "../shared/i18n";
 
 // Math with KaTeX, on the main thread and synchronous: a formula renders the moment the caret leaves
 // it, with no pending state. KaTeX, its stylesheet, and the sanitizer load on the first formula.
@@ -98,7 +99,7 @@ export function renderMath(tex: string, kind: MathKind): MathResult {
 }
 
 function render(k: typeof Katex, p: DOMPurify, tex: string, kind: MathKind): MathResult {
-  if (tex.length > MAX_SOURCE[kind]) return failure("too-long", "formula too long");
+  if (tex.length > MAX_SOURCE[kind]) return failure("too-long", t("math.tooLong"));
   let raw: string;
   try {
     katexCalls++;
@@ -108,15 +109,15 @@ function render(k: typeof Katex, p: DOMPurify, tex: string, kind: MathKind): Mat
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const limit = error instanceof RangeError || /too many expansions|maxExpand/i.test(message);
-    return failure(limit ? "limit" : "syntax", message.replace(/^KaTeX parse error: /, ""));
+    return failure(limit ? "limit" : "syntax", t("math.invalid"));
   }
   // Far past the cap before sanitizing; not worth the sanitizer's time.
-  if (raw.length > MAX_OUTPUT * 4) return failure("too-large", "formula too large");
+  if (raw.length > MAX_OUTPUT * 4) return failure("too-large", t("math.tooLarge"));
   const fragment = p.sanitize(raw, { ...MATH_PURIFY, RETURN_DOM_FRAGMENT: true });
   const holder = document.createElement("div");
   holder.appendChild(fragment.cloneNode(true));
   const html = holder.innerHTML;
-  if (html.length > MAX_OUTPUT) return failure("too-large", "formula too large");
+  if (html.length > MAX_OUTPUT) return failure("too-large", t("math.tooLarge"));
   const result: MathResult = { ok: true, html };
   fragments.set(result, fragment);
   return result;

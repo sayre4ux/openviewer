@@ -1,78 +1,30 @@
-// Settings → Images: where pasted and dropped images are copied, whether images from the internet
-// load, and whether Mermaid diagrams are drawn. In the app this is settings.json (read and written by
-// Rust, which only accepts the three listed folders); in the browser build it's localStorage, for tests.
+import { onSettingsChange, updateSettings } from "./settings";
 
-type Settings = { imageFolder: string; remoteImages: boolean; diagrams: boolean };
-const DEFAULTS: Settings = { imageFolder: "assets", remoteImages: false, diagrams: true };
-
-const native = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
-const KEY = "openviewer.settings";
-
-// Browser build only: tests set this before the page loads to make reading settings slow or fail.
-type LoadHook = { delay?: number; fail?: boolean };
-const loadHook = (): LoadHook => (window as unknown as { __settingsLoad?: LoadHook }).__settingsLoad ?? {};
-
-async function load(): Promise<Settings> {
-  if (native) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<Settings>("get_settings");
-  }
-  const hook = loadHook();
-  if (hook.delay) await new Promise((resolve) => setTimeout(resolve, hook.delay));
-  if (hook.fail) throw new Error("settings unavailable");
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") };
-  } catch {
-    return { ...DEFAULTS };
-  }
-}
-
-async function store(settings: Settings): Promise<Settings> {
-  if (native) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<Settings>("set_settings", { settings });
-  }
-  localStorage.setItem(KEY, JSON.stringify(settings));
-  return settings;
-}
-
+// Settings → Images: pasted images, remote images, and Mermaid diagrams.
 export function setupImagesPane() {
   const group = document.getElementById("image-folder")!;
   const remote = document.getElementById("remote-images") as HTMLInputElement;
   const diagrams = document.getElementById("diagrams") as HTMLInputElement;
   const radios = () => Array.from(group.querySelectorAll<HTMLInputElement>("input[type=radio]"));
-  // Every write sends the whole settings object, so changing one never resets the other.
-  let current: Settings = { ...DEFAULTS };
-  const show = (s: Settings) => {
-    current = { ...DEFAULTS, ...s };
-    for (const r of radios()) r.checked = r.value === current.imageFolder;
-    remote.checked = current.remoteImages === true;
-    diagrams.checked = current.diagrams !== false;
-  };
-  // Enabled only while `current` holds the saved settings. A write sends the whole object, so a click
-  // before they arrive, or after reading them failed, would put the defaults over them.
-  const enable = (on: boolean) => { for (const c of [...radios(), remote, diagrams]) c.disabled = !on; };
-  const reload = async () => {
-    try {
-      show(await load());
-      enable(true);
-    } catch {
-      enable(false);
+  let current = { imageFolder: "assets", remoteImages: false, diagrams: true };
+
+  const show = (settings: typeof current, ready: boolean) => {
+    current = settings;
+    for (const radio of radios()) {
+      radio.checked = radio.value === current.imageFolder;
+      radio.disabled = !ready;
     }
+    remote.checked = current.remoteImages;
+    remote.disabled = !ready;
+    diagrams.checked = current.diagrams;
+    diagrams.disabled = !ready;
   };
-  const update = async (change: Partial<Settings>) => {
-    try {
-      show(await store({ ...current, ...change }));
-    } catch {
-      await reload();
-    }
+  const update = (change: Partial<typeof current>) => {
+    void updateSettings(change).catch(() => show(current, false));
   };
-  group.addEventListener("change", (e) => void update({ imageFolder: (e.target as HTMLInputElement).value }));
-  remote.addEventListener("change", () => void update({ remoteImages: remote.checked }));
-  diagrams.addEventListener("change", () => void update({ diagrams: diagrams.checked }));
-  enable(false);
-  void reload();
-  if (native) {
-    void import("@tauri-apps/api/event").then(({ listen }) => listen<Settings>("settings-changed", ({ payload }) => show(payload)));
-  }
+
+  group.addEventListener("change", (event) => update({ imageFolder: (event.target as HTMLInputElement).value }));
+  remote.addEventListener("change", () => update({ remoteImages: remote.checked }));
+  diagrams.addEventListener("change", () => update({ diagrams: diagrams.checked }));
+  onSettingsChange(show);
 }

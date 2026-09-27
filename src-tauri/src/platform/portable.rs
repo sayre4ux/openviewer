@@ -11,6 +11,7 @@ use std::{
 };
 
 use super::{path_name, EXISTS};
+use crate::i18n;
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -33,13 +34,13 @@ pub fn open_for_read(path: &Path) -> Result<fs::File, String> {
   let file = options.open(path).map_err(|e| {
     #[cfg(unix)]
     if e.raw_os_error() == Some(libc::ELOOP) {
-      return format!("{} is a symbolic link and will not be followed", path_name(path));
+      return i18n::t_with("error.document.symbolicLink", &[("name", &path_name(path))]);
     }
     e.to_string()
   })?;
   let meta = file.metadata().map_err(|e| e.to_string())?;
-  if meta.file_type().is_symlink() { return Err(format!("{} is a symbolic link and will not be followed", path_name(path))); }
-  if !meta.is_file() { return Err(format!("{} is not a regular file", path_name(path))); }
+  if meta.file_type().is_symlink() { return Err(i18n::t_with("error.document.symbolicLink", &[("name", &path_name(path))])); }
+  if !meta.is_file() { return Err(i18n::t_with("error.document.notRegular", &[("name", &path_name(path))])); }
   Ok(file)
 }
 
@@ -52,11 +53,11 @@ pub fn create_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
 pub fn replace_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
   if let Ok(meta) = fs::symlink_metadata(target) {
     if meta.file_type().is_symlink() || !meta.is_file() {
-      return Err(format!("{} is not a regular file", path_name(target)));
+      return Err(i18n::t_with("error.document.notRegular", &[("name", &path_name(target))]));
     }
   }
   let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-  let name = target.file_name().ok_or_else(|| "Invalid file path".to_string())?.to_string_lossy();
+  let name = target.file_name().ok_or_else(|| i18n::t("error.file.invalidPath"))?.to_string_lossy();
   let permissions = fs::metadata(target).ok().map(|m| m.permissions());
   let (temp, mut file) = loop {
     let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);

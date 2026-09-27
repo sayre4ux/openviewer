@@ -11,6 +11,9 @@ and read in one view, and Markdown syntax disappears once you finish typing it.
   Markdown markers reappear only while the cursor is inside them. ⌘/ switches to plain source.
 - **Your file stays your file.** The text on disk is the document. Opening and saving without edits
   leaves every byte the same, including CRLF line endings and a UTF-8 BOM, and saves are atomic.
+- **Four interface languages.** OpenViewer’s menus, editor controls, and Settings are available in
+  English, 繁體中文, 简体中文, and 日本語. Choose a language in Settings → General, or follow the
+  macOS preferred language order with System.
 - **Tables you can edit in place.** Click a cell and type, Tab to move, and use the toolbar to add or
   remove rows and columns. Each edit changes only the lines it touches; **Tidy** lines up the columns.
 - **Images.** Paste or drag an image in and it is copied into `./assets` next to the document and

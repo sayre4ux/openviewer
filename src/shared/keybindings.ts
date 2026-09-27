@@ -1,4 +1,5 @@
 import { type Overrides, sanitize } from "./keys";
+import { t } from "./i18n";
 
 // Where custom shortcuts live. In the app: `keybindings.json` in the app's config folder, read and
 // written by Rust, which also rebuilds the menu and tells every window. In a plain browser (tests):
@@ -28,7 +29,7 @@ function browserStore(): KeybindingStore {
     try {
       return { overrides: sanitize(JSON.parse(localStorage.getItem(storageKey) ?? "{}")), problems: [] };
     } catch {
-      return { overrides: {}, problems: ["Saved shortcuts aren't valid JSON"] };
+      return { overrides: {}, problems: [t("keybindings.browserInvalidJson")] };
     }
   };
   window.addEventListener("storage", (e) => {

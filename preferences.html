@@ -3,63 +3,84 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Settings</title>
+    <title data-i18n="settings.title">Settings</title>
   </head>
   <body>
     <div class="prefs">
-      <nav class="prefs-nav" aria-label="Settings sections">
-        <button class="prefs-tab is-active" type="button" data-pane="shortcuts" aria-current="page">Shortcuts</button>
-        <button class="prefs-tab" type="button" data-pane="images">Images</button>
+      <nav class="prefs-nav" aria-label="Settings sections" data-i18n-aria-label="settings.sections">
+        <button class="prefs-tab is-active" type="button" data-pane="general" aria-current="page" data-i18n="settings.tab.general">General</button>
+        <button class="prefs-tab" type="button" data-pane="shortcuts" data-i18n="settings.tab.shortcuts">Shortcuts</button>
+        <button class="prefs-tab" type="button" data-pane="images" data-i18n="settings.tab.images">Images</button>
       </nav>
-      <main class="prefs-main" id="pane-shortcuts">
+      <main class="prefs-main" id="pane-general">
         <header class="prefs-head">
-          <h1>Shortcuts</h1>
-          <input id="search" class="prefs-search" type="search" placeholder="Search commands" autocomplete="off" spellcheck="false" />
+          <h1 data-i18n="settings.general.title">General</h1>
+        </header>
+        <div class="prefs-list">
+          <section class="prefs-group">
+            <h2 data-i18n="settings.general.language.title">Language</h2>
+            <label class="prefs-choice" for="language">
+              <span data-i18n="settings.general.language.title">Language</span>
+              <select id="language" name="language" disabled>
+                <option value="system" data-i18n="settings.language.system">System</option>
+                <option value="en" data-i18n="settings.language.en">English</option>
+                <option value="zh-Hant" data-i18n="settings.language.zh-Hant">繁體中文</option>
+                <option value="zh-Hans" data-i18n="settings.language.zh-Hans">简体中文</option>
+                <option value="ja" data-i18n="settings.language.ja">日本語</option>
+              </select>
+            </label>
+          </section>
+        </div>
+      </main>
+      <main class="prefs-main" id="pane-shortcuts" hidden>
+        <header class="prefs-head">
+          <h1 data-i18n="settings.shortcuts.title">Shortcuts</h1>
+          <input id="search" class="prefs-search" type="search" data-i18n-placeholder="settings.shortcuts.search" placeholder="Search commands" autocomplete="off" spellcheck="false" />
         </header>
         <div id="problems" class="prefs-problems" role="status" hidden></div>
         <div id="list" class="prefs-list"></div>
         <footer class="prefs-foot">
-          <button id="open-file" class="prefs-link" type="button">Open keybindings file</button>
-          <span id="reset-all-wrap"><button id="reset-all" class="prefs-link" type="button">Reset all</button></span>
+          <button id="open-file" class="prefs-link" type="button" data-i18n="settings.shortcuts.openFile">Open keybindings file</button>
+          <span id="reset-all-wrap"><button id="reset-all" class="prefs-link" type="button" data-i18n="settings.shortcuts.resetAll">Reset all</button></span>
         </footer>
       </main>
       <main class="prefs-main" id="pane-images" hidden>
         <header class="prefs-head">
-          <h1>Images</h1>
+          <h1 data-i18n="settings.images.title">Images</h1>
         </header>
         <div class="prefs-list">
           <section class="prefs-group">
-            <h2>When you paste or drop an image</h2>
-            <p class="prefs-help">OpenViewer copies it into a folder next to the document and links it with a relative path, so the document and its images move together.</p>
+            <h2 data-i18n="settings.images.pasteDrop.title">When you paste or drop an image</h2>
+            <p class="prefs-help" data-i18n="settings.images.pasteDrop.description">OpenViewer copies it into a folder next to the document and links it with a relative path, so the document and its images move together.</p>
             <fieldset id="image-folder" class="prefs-choices">
-              <legend class="prefs-sr">Copy images to</legend>
+              <legend class="prefs-sr" data-i18n="settings.images.folder.legend">Copy images to</legend>
               <label class="prefs-choice"><input type="radio" name="image-folder" value="assets" />
-                <span><strong>./assets</strong> <span class="prefs-choice-note">one folder shared by the documents beside it</span></span></label>
+                <span><strong>./assets</strong> <span class="prefs-choice-note" data-i18n="settings.images.folder.assets.note">one folder shared by the documents beside it</span></span></label>
               <label class="prefs-choice"><input type="radio" name="image-folder" value="{name}.assets" />
-                <span><strong>./<em>document name</em>.assets</strong> <span class="prefs-choice-note">a folder for each document, as Typora does</span></span></label>
+                <span><strong>./<em data-i18n="settings.images.folder.documentName">document name</em>.assets</strong> <span class="prefs-choice-note" data-i18n="settings.images.folder.named.note">a folder for each document, as Typora does</span></span></label>
               <label class="prefs-choice"><input type="radio" name="image-folder" value="." />
-                <span><strong>./</strong> <span class="prefs-choice-note">right next to the document</span></span></label>
+                <span><strong>./</strong> <span class="prefs-choice-note" data-i18n="settings.images.folder.same.note">right next to the document</span></span></label>
             </fieldset>
-            <p class="prefs-help">An Untitled document is saved first, so the images have somewhere to go.</p>
+            <p class="prefs-help" data-i18n="settings.images.untitled">An Untitled document is saved first, so the images have somewhere to go.</p>
           </section>
           <section class="prefs-group">
-            <h2>Images from the internet</h2>
+            <h2 data-i18n="settings.images.remote.title">Images from the internet</h2>
             <label class="prefs-choice"><input id="remote-images" type="checkbox" />
-              <span><strong class="prefs-plain">Load images from the internet</strong> <span class="prefs-choice-note">off by default</span></span></label>
-            <p class="prefs-help prefs-risk">When this is on, opening a document downloads every web image in it. Whoever runs
+              <span><strong class="prefs-plain" data-i18n="settings.images.remote.label">Load images from the internet</strong> <span class="prefs-choice-note" data-i18n="settings.images.remote.default">off by default</span></span></label>
+            <p class="prefs-help prefs-risk" data-i18n="settings.images.remote.risk">When this is on, opening a document downloads every web image in it. Whoever runs
               the server behind an image learns that the document was opened and when, and sees your IP address,
               which shows roughly where you are. An image can work as a hidden read receipt, even in a document
               that looks harmless, and its server may recognize you again later through what OpenViewer keeps in
               its cache. A server can also redirect the request to a device on your own network, such as
               a router or printer, and OpenViewer can’t fully block that yet.</p>
-            <p class="prefs-help">Turn this on only if you trust the documents you open. When it’s off, a web image shows
+            <p class="prefs-help" data-i18n="settings.images.remote.trust">Turn this on only if you trust the documents you open. When it’s off, a web image shows
               as a note naming its server, and export leaves it out. Images stored with the document always show.</p>
           </section>
           <section class="prefs-group">
-            <h2>Diagrams</h2>
+            <h2 data-i18n="settings.images.diagrams.title">Diagrams</h2>
             <label class="prefs-choice"><input id="diagrams" type="checkbox" />
-              <span><strong class="prefs-plain">Draw Mermaid diagrams</strong> <span class="prefs-choice-note">on by default</span></span></label>
-            <p class="prefs-help">A <code>```mermaid</code> code block is drawn as a picture. Drawing happens inside a
+              <span><strong class="prefs-plain" data-i18n="settings.images.diagrams.label">Draw Mermaid diagrams</strong> <span class="prefs-choice-note" data-i18n="settings.images.diagrams.default">on by default</span></span></label>
+            <p class="prefs-help" data-i18n="settings.images.diagrams.help">A <code>```mermaid</code> code block is drawn as a picture. Drawing happens inside a
               sealed-off part of the app with no network access, and the result is shown as an image. A badly made
               diagram can still freeze its window; if one does, OpenViewer shows its code the next time instead of
               drawing it. Turn this off to show every diagram as code.</p>

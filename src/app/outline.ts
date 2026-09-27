@@ -1,6 +1,7 @@
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { setI18nText, t } from "../shared/i18n";
 
 // Outline sidebar: the document's headings, indented by level. Clicking one moves the caret
 // there; the heading at the top of the window is marked as current while scrolling.
@@ -30,7 +31,7 @@ function readHeadings(state: EditorState): { headings: Heading[]; complete: bool
       const m = /^(?:ATX|Setext)Heading(\d)$/.exec(node.name);
       if (!m) return;
       const line = state.doc.lineAt(node.from);
-      out.push({ level: Number(m[1]), from: line.from, text: headingText(line.text) || "Untitled heading" });
+      out.push({ level: Number(m[1]), from: line.from, text: headingText(line.text) || t("outline.untitledHeading") });
       return false;
     },
   });
@@ -70,7 +71,7 @@ export function createOutline(host: HTMLElement) {
     if (headings.length === 0) {
       const empty = document.createElement("li");
       empty.className = "ov-outline-empty";
-      empty.textContent = "No headings";
+      setI18nText(empty, "outline.noHeadings");
       list.appendChild(empty);
     }
     markActive();

@@ -11,7 +11,7 @@ use std::{
 use tauri::{Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::platform::{self, path_name};
+use crate::{i18n, platform::{self, path_name}};
 
 pub const DOCUMENT_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
 // A document is a text file. Anything larger is refused before it is read into memory.
@@ -27,19 +27,19 @@ pub fn has_extension(path: &Path, list: &[&str]) -> bool {
 pub struct AuthorizedDocuments(pub Mutex<HashSet<PathBuf>>);
 
 pub fn canonical_document(path: &Path, allow_new: bool) -> Result<PathBuf, String> {
-  if !path.is_absolute() { return Err("Document path must be absolute".into()); }
+  if !path.is_absolute() { return Err(i18n::t("error.document.absolute")); }
   let canonical = match fs::canonicalize(path) {
     Ok(path) => path,
     Err(e) if allow_new && e.kind() == std::io::ErrorKind::NotFound => {
       if fs::symlink_metadata(path).is_ok() { return Err(e.to_string()); }
-      let parent = path.parent().ok_or_else(|| "Invalid file path".to_string())?;
-      let name = path.file_name().ok_or_else(|| "Invalid file path".to_string())?;
+      let parent = path.parent().ok_or_else(|| i18n::t("error.file.invalidPath"))?;
+      let name = path.file_name().ok_or_else(|| i18n::t("error.file.invalidPath"))?;
       fs::canonicalize(parent).map_err(|e| e.to_string())?.join(name)
     }
     Err(e) => return Err(e.to_string()),
   };
   if canonical.exists() && !canonical.is_file() {
-    return Err(format!("{} is not a regular file", path_name(path)));
+    return Err(i18n::t_with("error.document.notRegular", &[("name", &path_name(path))]));
   }
   Ok(canonical)
 }
@@ -56,7 +56,7 @@ impl AuthorizedDocuments {
   pub fn authorize_exact(&self, checked: &Path) -> Result<PathBuf, String> {
     let canonical = canonical_document(checked, false)?;
     if canonical != checked {
-      return Err(format!("{} changed while it was being opened.", path_name(checked)));
+      return Err(i18n::t_with("error.document.changed", &[("name", &path_name(checked))]));
     }
     self.0.lock().unwrap().insert(canonical.clone());
     Ok(canonical)
@@ -65,7 +65,7 @@ impl AuthorizedDocuments {
   pub fn require(&self, path: &Path, allow_new: bool) -> Result<PathBuf, String> {
     let canonical = canonical_document(path, allow_new)?;
     if !self.0.lock().unwrap().contains(&canonical) {
-      return Err("Document path was not chosen by the user".into());
+      return Err(i18n::t("error.document.userChoice"));
     }
     Ok(canonical)
   }
@@ -73,7 +73,7 @@ impl AuthorizedDocuments {
 
 pub fn authorize_document<R: Runtime>(app: &tauri::AppHandle<R>, path: &Path, allow_new: bool) -> Result<String, String> {
   let canonical = app.state::<AuthorizedDocuments>().authorize(path, allow_new)?;
-  canonical.to_str().map(str::to_owned).ok_or_else(|| "Document path is not valid UTF-8".to_string())
+  canonical.to_str().map(str::to_owned).ok_or_else(|| i18n::t("error.file.invalidPath"))
 }
 
 // Dropped files that may be opened as documents: a regular file whose dropped name and resolved
@@ -88,15 +88,16 @@ pub fn droppable_documents(paths: &[PathBuf]) -> Vec<&PathBuf> {
 // Async so Tauri runs these off the main thread: a blocking dialog on the main thread hangs macOS.
 #[tauri::command]
 pub async fn open_dialog<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Option<String>, String> {
-  let selected = app.dialog().file().add_filter("Markdown and text", DOCUMENT_EXTENSIONS).blocking_pick_file();
+  let selected = app.dialog().file().add_filter(&i18n::t("dialog.fileFilter"), DOCUMENT_EXTENSIONS).blocking_pick_file();
   selected.map(|p| authorize_document(&app, &p.into_path().map_err(|e| e.to_string())?, false)).transpose()
 }
 
 #[tauri::command]
 pub async fn save_dialog<R: Runtime>(app: tauri::AppHandle<R>, default_path: String) -> Result<Option<String>, String> {
   let default = Path::new(&default_path);
-  let name = default.file_name().and_then(|s| s.to_str()).unwrap_or("Untitled.md");
-  let mut dialog = app.dialog().file().add_filter("Markdown and text", DOCUMENT_EXTENSIONS).set_file_name(name);
+  let fallback = format!("{}.md", i18n::t("app.untitled"));
+  let name = default.file_name().and_then(|s| s.to_str()).unwrap_or(&fallback);
+  let mut dialog = app.dialog().file().add_filter(&i18n::t("dialog.fileFilter"), DOCUMENT_EXTENSIONS).set_file_name(name);
   if let Some(dir) = default.parent().filter(|p| !p.as_os_str().is_empty() && p.is_dir()) { dialog = dialog.set_directory(dir); }
   let selected = dialog.blocking_save_file();
   selected.map(|p| authorize_document(&app, &p.into_path().map_err(|e| e.to_string())?, true)).transpose()
@@ -116,17 +117,18 @@ pub struct Decoded {
 }
 
 // The frontend recognizes this prefix and offers to save as UTF-8 instead.
+#[cfg(test)]
 pub const UNMAPPABLE: &str = "unmappable:";
 
 pub fn decode(bytes: &[u8], name: &str) -> Result<Decoded, String> {
   if let Some((encoding, bom_len)) = encoding_rs::Encoding::for_bom(bytes) {
     let (text, had_errors) = encoding.decode_without_bom_handling(&bytes[bom_len..]);
-    if had_errors { return Err(format!("{name} isn't valid {}", encoding.name())); }
+    if had_errors { return Err(i18n::t_with("error.document.invalidEncoding", &[("name", name), ("encoding", encoding.name())])); }
     return Ok(Decoded { text: text.into_owned(), bom: true, encoding: encoding.name().into(), exact: true });
   }
   // DECISION: without a BOM, a NUL byte means a binary file (an image, a PDF), not text. UTF-16 without
   // a BOM is refused too: it's rare, and guessing it wrong turns a binary file into garbage text.
-  if bytes.contains(&0) { return Err(format!("{name} looks like a binary file, not text")); }
+  if bytes.contains(&0) { return Err(i18n::t_with("error.document.binary", &[("name", name)])); }
   if let Ok(text) = std::str::from_utf8(bytes) {
     return Ok(Decoded { text: text.to_owned(), bom: false, encoding: "UTF-8".into(), exact: true });
   }
@@ -134,7 +136,7 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<Decoded, String> {
   detector.feed(bytes, true);
   let encoding = detector.guess(None, true);
   let (text, had_errors) = encoding.decode_without_bom_handling(bytes);
-  if had_errors { return Err(format!("{name} isn't valid UTF-8, and it doesn't read cleanly as {} either", encoding.name())); }
+  if had_errors { return Err(i18n::t_with("error.document.invalidUtf8", &[("name", name), ("encoding", encoding.name())])); }
   let text = text.into_owned();
   let exact = encode(&text, false, encoding.name()).is_ok_and(|b| b == bytes);
   Ok(Decoded { text, bom: false, encoding: encoding.name().into(), exact })
@@ -159,9 +161,9 @@ pub fn encode(text: &str, bom: bool, encoding: &str) -> Result<Vec<u8>, String> 
     "UTF-16LE" => Ok(utf16(false)),
     "UTF-16BE" => Ok(utf16(true)),
     label => {
-      let enc = encoding_rs::Encoding::for_label(label.as_bytes()).ok_or_else(|| format!("unknown encoding {label}"))?;
+      let enc = encoding_rs::Encoding::for_label(label.as_bytes()).ok_or_else(|| i18n::t_with("error.document.unknownEncoding", &[("encoding", label)]))?;
       let (bytes, _, unmappable) = enc.encode(text);
-      if unmappable { return Err(format!("{UNMAPPABLE}Some characters can't be saved in {label}.")); }
+      if unmappable { return Err(i18n::t_with("error.document.unmappable", &[("encoding", label)])); }
       Ok(bytes.into_owned())
     }
   }
@@ -181,15 +183,15 @@ pub struct Document {
 fn too_large(path: &Path, len: u64) -> String {
   // DECISION: the dialog says MB and means mebibytes, rounded up, so the 64 MiB limit reads as 64 MB.
   let mb = len.div_ceil(1024 * 1024);
-  format!("{} is too large to open ({mb} MB; the limit is 64 MB)", path_name(path))
+  i18n::t_with("error.document.tooLarge", &[("name", &path_name(path)), ("size", &mb.to_string())])
 }
 
 pub fn read_document_file(path: &Path) -> Result<Document, String> {
   let file = platform::open_for_read(path)?;
   let meta = file.metadata().map_err(|e| e.to_string())?;
   let name = path_name(path);
-  if meta.is_dir() { return Err(format!("{name} is a directory")); }
-  if !meta.is_file() { return Err(format!("{name} is not a regular file")); }
+  if meta.is_dir() { return Err(i18n::t_with("error.document.directory", &[("name", &name)])); }
+  if !meta.is_file() { return Err(i18n::t_with("error.document.notRegular", &[("name", &name)])); }
   if meta.len() > OPEN_LIMIT { return Err(too_large(path, meta.len())); }
   let mut bytes = Vec::new();
   file.take(OPEN_LIMIT + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
@@ -216,14 +218,14 @@ pub fn write_authorized_document(authorized: &AuthorizedDocuments, path: &Path, 
 pub fn write_regular_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
   match fs::symlink_metadata(path) {
     Ok(meta) if meta.file_type().is_symlink() => {
-      return Err(format!("{} is a symbolic link and will not be followed", path_name(path)));
+      return Err(i18n::t_with("error.document.symbolicLink", &[("name", &path_name(path))]));
     }
-    Ok(meta) if !meta.is_file() => return Err(format!("{} is not a regular file", path_name(path))),
+    Ok(meta) if !meta.is_file() => return Err(i18n::t_with("error.document.notRegular", &[("name", &path_name(path))])),
     Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
     _ => {}
   }
-  let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| "Invalid file path".to_string())?;
-  let name = path.file_name().ok_or_else(|| "Invalid file path".to_string())?;
+  let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| i18n::t("error.file.invalidPath"))?;
+  let name = path.file_name().ok_or_else(|| i18n::t("error.file.invalidPath"))?;
   let parent = fs::canonicalize(parent).map_err(|e| e.to_string())?;
   platform::replace_file(&parent.join(name), bytes)
 }

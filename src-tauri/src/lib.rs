@@ -10,6 +10,7 @@ use tauri::{webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
 mod documents;
 mod export;
 mod images;
+mod i18n;
 mod links;
 mod menu;
 mod platform;
@@ -201,8 +202,8 @@ pub fn run() {
         app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
         updater::start_daily_checks(app.handle().clone());
       }
-      menu::load(app.handle())?;
       settings::load(app.handle());
+      menu::load(app.handle())?;
       // Windows and Linux pass files to open as arguments; macOS sends RunEvent::Opened instead.
       #[cfg(not(target_os = "macos"))]
       for arg in std::env::args_os().skip(1) {

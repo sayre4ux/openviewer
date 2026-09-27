@@ -18,7 +18,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-use crate::documents::{has_extension, AuthorizedDocuments};
+use crate::{documents::{has_extension, AuthorizedDocuments}, i18n};
 use crate::platform::{self, path_name};
 
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "heic", "heif", "bmp", "ico", "tif", "tiff"];
@@ -242,13 +242,13 @@ pub fn resolve_image_path(
 #[tauri::command]
 pub async fn allow_image_folder<R: Runtime>(app: tauri::AppHandle<R>, document_path: String, source: String) -> Result<bool, String> {
   let document = app.state::<AuthorizedDocuments>().require(Path::new(&document_path), false)?;
-  let image = canonical_image(&document, Path::new(&source)).filter(|i| is_image_file(i)).ok_or("That image can't be found.")?;
-  let folder = grantable_folder(&image, home_dir().as_deref()).ok_or("Images directly in the home folder can't be allowed.")?;
+  let image = canonical_image(&document, Path::new(&source)).filter(|i| is_image_file(i)).ok_or_else(|| i18n::t("error.image.notFound"))?;
+  let folder = grantable_folder(&image, home_dir().as_deref()).ok_or_else(|| i18n::t("error.image.homeFolder"))?;
   let yes = app.dialog()
-    .message(format!("“{}” wants to show images from “{}”. Allow it for this document until OpenViewer quits?", path_name(&document), folder.display()))
-    .title("Show Images from Another Folder")
+    .message(i18n::t_with("error.image.folderDialog", &[("document", &path_name(&document)), ("folder", &folder.display().to_string())]))
+    .title(i18n::t("error.image.folderDialog.title"))
     .kind(MessageDialogKind::Warning)
-    .buttons(MessageDialogButtons::OkCancelCustom("Show Images".into(), "Cancel".into()))
+    .buttons(MessageDialogButtons::OkCancelCustom(i18n::t("error.image.showFolder.button"), i18n::t("dialog.cancel")))
     .blocking_show();
   if yes { app.state::<ImageGrants>().allow_folder(&document, &folder); }
   Ok(yes)
@@ -284,15 +284,15 @@ fn target_folder(document: &Path, setting: &str) -> Option<PathBuf> {
 // needed; a symlink or a file in its place is refused.
 fn ensure_folder(folder: &Path, document_dir: &Path) -> Result<PathBuf, String> {
   match fs::symlink_metadata(folder) {
-    Ok(meta) if meta.file_type().is_symlink() => return Err(format!("{} is a symbolic link; images won't be saved there", path_name(folder))),
-    Ok(meta) if !meta.is_dir() => return Err(format!("{} exists and isn't a folder", path_name(folder))),
+    Ok(meta) if meta.file_type().is_symlink() => return Err(i18n::t_with("error.image.folderSymlink", &[("name", &path_name(folder))])),
+    Ok(meta) if !meta.is_dir() => return Err(i18n::t_with("error.image.folderExists", &[("name", &path_name(folder))])),
     Ok(_) => {}
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::create_dir(folder).map_err(|e| e.to_string())?,
     Err(e) => return Err(e.to_string()),
   }
   let canonical = fs::canonicalize(folder).map_err(|e| e.to_string())?;
   let expected = if folder == document_dir { document_dir.to_path_buf() } else { document_dir.join(folder.file_name().unwrap_or_default()) };
-  if canonical != expected { return Err(format!("{} isn't inside the document's folder", path_name(folder))); }
+  if canonical != expected { return Err(i18n::t_with("error.image.folderOutside", &[("name", &path_name(folder))])); }
   Ok(canonical)
 }
 
@@ -310,11 +310,11 @@ fn file_name_from(hint: &str) -> Option<(String, String)> {
 // Store image bytes for a document and return the stored file. Reuses an identical file already in the
 // folder; otherwise picks a free name (`name.png`, `name-1.png`, ...) without overwriting anything.
 fn store_image(document: &Path, setting: &str, name_hint: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-  if bytes.is_empty() { return Err("The image is empty.".into()); }
-  if bytes.len() as u64 > IMAGE_LIMIT { return Err("The image is larger than 32 MB.".into()); }
-  let (stem, ext) = file_name_from(name_hint).ok_or("That file type isn't a supported image.")?;
-  let document_dir = document.parent().ok_or("Invalid document path")?;
-  let folder = ensure_folder(&target_folder(document, setting).ok_or("Invalid document path")?, document_dir)?;
+  if bytes.is_empty() { return Err(i18n::t("error.image.empty")); }
+  if bytes.len() as u64 > IMAGE_LIMIT { return Err(i18n::t("error.image.tooLarge")); }
+  let (stem, ext) = file_name_from(name_hint).ok_or_else(|| i18n::t("error.image.unsupportedType"))?;
+  let document_dir = document.parent().ok_or_else(|| i18n::t("error.image.invalidDocument"))?;
+  let folder = ensure_folder(&target_folder(document, setting).ok_or_else(|| i18n::t("error.image.invalidDocument"))?, document_dir)?;
   if let Ok(entries) = fs::read_dir(&folder) {
     for entry in entries.flatten().take(5000) {
       let path = entry.path();
@@ -343,7 +343,7 @@ fn store_image(document: &Path, setting: &str, name_hint: &str, bytes: &[u8]) ->
     }
   }
   release_quota(bytes.len() as u64);
-  Err("Couldn't find a free file name for the image.".into())
+  Err(i18n::t("error.image.noName"))
 }
 
 // The Markdown for an image: a path relative to the document, `/`-separated, with characters that
@@ -374,7 +374,7 @@ fn take_quota(len: u64) -> Result<(), String> {
   let bytes = INSERTED_BYTES.fetch_add(len, SeqCst);
   if files >= SESSION_FILES || bytes + len > SESSION_BYTES {
     release_quota(len);
-    return Err("Too many images were added in this session. Restart OpenViewer to add more.".into());
+    return Err(i18n::t("error.image.sessionLimit"));
   }
   Ok(())
 }
@@ -395,7 +395,7 @@ fn insert(
   let document = authorized.require(Path::new(document_path), false)?;
   let setting = settings.0.lock().unwrap().image_folder.clone();
   let stored = store_image(&document, &setting, name_hint, bytes)?;
-  Ok(InsertedImage { markdown: markdown_for(&document, &stored).ok_or("Couldn't link the image")? })
+  Ok(InsertedImage { markdown: markdown_for(&document, &stored).ok_or_else(|| i18n::t("error.image.cannotLink"))? })
 }
 
 pub fn percent_decode(s: &str) -> String {
@@ -425,9 +425,9 @@ pub async fn insert_image(
   authorized: tauri::State<'_, AuthorizedDocuments>,
   settings: tauri::State<'_, crate::settings::SettingsState>,
 ) -> Result<InsertedImage, String> {
-  let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("Expected image bytes".into()) };
+  let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err(i18n::t("error.image.expectedBytes")) };
   let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(percent_decode);
-  let document = header("x-document").ok_or("Missing document")?;
+  let document = header("x-document").ok_or_else(|| i18n::t("error.image.missingDocument"))?;
   let name = header("x-name").unwrap_or_else(|| "image.png".into());
   insert(&authorized, &settings, &document, &name, bytes)
 }
@@ -444,7 +444,7 @@ pub async fn insert_dropped_image(
 ) -> Result<InsertedImage, String> {
   let source = fs::canonicalize(&source).map_err(|e| e.to_string())?;
   if !dropped.0.lock().unwrap().remove(&(source.clone(), window.label().to_string())) {
-    return Err("That image wasn't dropped on this window.".into());
+    return Err(i18n::t("error.image.wrongWindow"));
   }
   let file = platform::open_for_read(&source)?;
   let mut bytes = Vec::new();

@@ -2,6 +2,7 @@ import { codeFolding, foldable, foldedRanges, foldEffect, foldCode, syntaxTree, 
 import type { SyntaxNode } from "@lezer/common";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
+import { setI18nAttribute } from "../shared/i18n";
 
 // Heading folding. The Markdown language already knows each heading's section (from the heading
 // line to the next heading of the same or higher level); this adds the chevron, the placeholder,
@@ -45,7 +46,7 @@ class Chevron extends WidgetType {
     const el = document.createElement("span");
     el.className = "cm-md-fold" + (this.folded ? " is-folded" : "");
     el.setAttribute("role", "button");
-    el.setAttribute("aria-label", this.folded ? "Expand section" : "Collapse section");
+    setI18nAttribute(el, "aria-label", this.folded ? "fold.expandSection" : "fold.collapseSection");
     el.setAttribute("aria-expanded", String(!this.folded));
     el.addEventListener("mousedown", (e) => {
       e.preventDefault(); // don't move the caret into the heading, which would reveal its marks
@@ -98,8 +99,8 @@ export const headingFolding = [
       const el = document.createElement("span");
       el.className = "cm-md-folded";
       el.textContent = "…";
-      el.title = "Folded section; click to expand";
-      el.setAttribute("aria-label", "Folded section");
+      setI18nAttribute(el, "title", "fold.foldedTitle");
+      setI18nAttribute(el, "aria-label", "fold.foldedLabel");
       el.addEventListener("click", onclick);
       return el;
     },
