@@ -39,7 +39,9 @@ npm run app:dev      # run the app with live reload
 npm run app:build    # build src-tauri/target/release/bundle/macos/OpenViewer.app
 ```
 
-The build is not signed with a Developer ID, so the first launch needs a right-click → Open.
+The build is not signed with a Developer ID or notarized yet, so macOS blocks the first launch of a
+downloaded copy. Open it once, then go to System Settings → Privacy & Security and click **Open Anyway**
+next to the message about OpenViewer. (Or, in Terminal: `xattr -d com.apple.quarantine /path/to/OpenViewer.app`.)
 
 ## Test
 

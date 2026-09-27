@@ -59,6 +59,9 @@
         "role": "Editor",
         "rank": "Alternate"
       }
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }
