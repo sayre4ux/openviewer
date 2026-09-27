@@ -61,14 +61,61 @@ fn create_document_window<R: Runtime>(app: tauri::AppHandle<R>, path: Option<Str
   open_window(&app, url)
 }
 
+const WINDOW_SIZE: (f64, f64) = (1100.0, 760.0);
+// DECISION: 22 points down and right of the front document window, as AppKit's cascade does.
+const CASCADE: f64 = 22.0;
+
 fn open_window<R: Runtime>(app: &tauri::AppHandle<R>, url: String) -> Result<(), String> {
   let label = format!("document-{}", WINDOW_ID.fetch_add(1, Ordering::Relaxed));
   // DECISION: document windows keep WebKit's persistent store (not `incognito`): the outline and word
   // count toggles live in localStorage. WebKit blocks third-party cookies here, but with remote images on
   // a server could still recognize a reader through the HTTP cache; Preferences says so.
-  WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
-    .title("OpenViewer").inner_size(1100.0, 760.0).min_inner_size(480.0, 360.0)
-    .build().map(|_| ()).map_err(|e| e.to_string())
+  let builder = WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
+    .title("OpenViewer").inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1).min_inner_size(480.0, 360.0);
+  let builder = match cascade_position(app) { Some((x, y)) => builder.position(x, y), None => builder };
+  builder.build().map(|_| ()).map_err(|e| e.to_string())
+}
+
+// Where a new document window goes so it doesn't hide the one in front: offset from the focused (or
+// last focused) document window, past any window already sitting there, back to the screen's top left
+// once the window would run off the bottom or right.
+fn cascade_position<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<(f64, f64)> {
+  let windows = app.webview_windows();
+  let documents: Vec<_> = windows.values().filter(|w| w.label() != "preferences").collect();
+  let last = app.state::<LastDocument>().0.lock().unwrap().clone();
+  let front = documents.iter().find(|w| w.is_focused().unwrap_or(false)).copied()
+    .or_else(|| last.and_then(|label| windows.get(&label)))?;
+  let scale = front.scale_factor().ok()?;
+  let at = front.outer_position().ok()?.to_logical::<f64>(scale);
+  // The new window's frame: its content size plus the title bar the front window has.
+  let title_bar = match (front.outer_size(), front.inner_size()) {
+    (Ok(outer), Ok(inner)) => (outer.to_logical::<f64>(scale).height - inner.to_logical::<f64>(scale).height).max(0.0),
+    _ => 0.0,
+  };
+  let screen = front.current_monitor().ok().flatten().map(|m| {
+    let (p, s) = (m.work_area().position.to_logical::<f64>(scale), m.work_area().size.to_logical::<f64>(scale));
+    (p.x, p.y, s.width, s.height)
+  });
+  let taken: Vec<(f64, f64)> = documents.iter()
+    .filter_map(|w| w.outer_position().ok().map(|p| p.to_logical::<f64>(scale)))
+    .map(|p| (p.x, p.y))
+    .collect();
+  Some(cascade_from((at.x, at.y), (WINDOW_SIZE.0, WINDOW_SIZE.1 + title_bar), screen, &taken))
+}
+
+fn cascade_from(front: (f64, f64), frame: (f64, f64), screen: Option<(f64, f64, f64, f64)>, taken: &[(f64, f64)]) -> (f64, f64) {
+  let fits = |p: (f64, f64)| screen.map_or(true, |(sx, sy, sw, sh)| p.0 + frame.0 <= sx + sw && p.1 + frame.1 <= sy + sh);
+  let free = |p: (f64, f64)| !taken.iter().any(|t| (t.0 - p.0).abs() < 1.0 && (t.1 - p.1).abs() < 1.0);
+  let mut p = (front.0 + CASCADE, front.1 + CASCADE);
+  // Bounded: with every step taken (a screen too small to cascade on) the last candidate is used.
+  for _ in 0..64 {
+    if !fits(p) {
+      if let Some((sx, sy, _, _)) = screen { p = (sx + CASCADE, sy + CASCADE); }
+    }
+    if free(p) { break; }
+    p = (p.0 + CASCADE, p.1 + CASCADE);
+  }
+  p
 }
 
 fn encode_query(value: &str) -> String {
@@ -250,6 +297,24 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn new_windows_cascade_and_wrap() {
+    use super::cascade_from;
+    let screen = Some((0.0, 25.0, 1920.0, 1055.0));
+    let frame = (1100.0, 788.0);
+    assert_eq!(cascade_from((410.0, 103.0), frame, screen, &[(410.0, 103.0)]), (432.0, 125.0));
+    // A window already there (opened while no window had focus): step past it.
+    assert_eq!(cascade_from((410.0, 103.0), frame, screen, &[(410.0, 103.0), (432.0, 125.0)]), (454.0, 147.0));
+    // The frame, title bar included, would run off the bottom: back to the top left of the screen.
+    assert_eq!(cascade_from((410.0, 280.0), frame, screen, &[]), (22.0, 47.0));
+    // Would run off the right.
+    assert_eq!(cascade_from((820.0, 103.0), frame, screen, &[]), (22.0, 47.0));
+    assert_eq!(cascade_from((0.0, 0.0), frame, None, &[]), (22.0, 22.0));
+    // No room to cascade at all: still returns a position.
+    let tiny = Some((0.0, 0.0, 1100.0, 788.0));
+    let _ = cascade_from((0.0, 0.0), frame, tiny, &[(22.0, 22.0)]);
+  }
+
   #[test]
   fn document_dialog_permission_is_message_only() {
     let document: serde_json::Value = serde_json::from_str(include_str!("../capabilities/documents.json")).unwrap();
