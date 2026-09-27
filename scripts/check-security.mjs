@@ -217,6 +217,47 @@ try {
   check("no remote private image element",
     [...rendered.imgs, ...remoteOn.imgs].every((img) => !/127\.0\.0\.1|192\.168\.1\.2|javascript:/i.test(img.src ?? "")));
 
+  // Diagram output is sanitized before it becomes an image: anything that runs, loads, or escapes is
+  // removed, or the diagram is refused. Synthetic SVGs stand in for a compromised renderer.
+  const svgCases = {
+    script: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><script>alert(1)</script><rect width="5" height="5"/></svg>',
+    onload: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" onload="alert(1)"><rect width="5" height="5" onclick="alert(2)"/></svg>',
+    use: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><use href="http://127.0.0.1/s.svg#x"/><use xlink:href="#r"/><rect id="r" width="5" height="5"/></svg>',
+    image: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><image href="http://127.0.0.1/a.png" width="5" height="5"/><feImage href="http://127.0.0.1/f.png"/><rect width="5" height="5"/></svg>',
+    animate: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><a href="javascript:alert(1)"><text>t</text></a><rect width="5" height="5"><animate attributeName="href" to="javascript:alert(1)"/><set attributeName="fill" to="red"/></rect></svg>',
+    remoteFill: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><marker id="m"/></defs><rect width="5" height="5" fill="url(http://127.0.0.1/p.svg#g)" style="background:url(http://127.0.0.1/b.png)" marker-end="url(#m)"/></svg>',
+    importStyle: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><style>@import url(http://127.0.0.1/x.css); rect { fill: red }</style><rect width="5" height="5"/></svg>',
+    urlStyle: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><style>rect { fill: url(http://127.0.0.1/p.svg#g) }</style><rect width="5" height="5"/></svg>',
+    escapedStyle: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><style>rect { fill: \\75rl(http://127.0.0.1/p) }</style><rect width="5" height="5"/></svg>',
+    foreignObject: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><foreignObject width="5" height="5"><div>label</div></foreignObject></svg>',
+    notSvg: '<div>not a picture</div>',
+    twoRoots: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>',
+    noViewBox: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5"/></svg>',
+    hugeViewBox: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 99999"><rect width="5" height="5"/></svg>',
+    nanViewBox: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 NaN 10"><rect width="5" height="5"/></svg>',
+  };
+  const svgResults = await page.evaluate(async (cases) => {
+    const out = {};
+    for (const [name, svg] of Object.entries(cases)) {
+      const r = await window.__ov.diagram.sanitize(svg);
+      out[name] = r.ok ? { ok: true, svg: atob(r.dataUrl.split(",")[1]) } : { ok: false, reason: r.reason };
+    }
+    return out;
+  }, svgCases);
+  const svgLeaks = Object.entries(svgResults).filter(([, r]) => r.ok)
+    .flatMap(([name, r]) => ["<script", "onload", "onclick", "127.0.0.1", "javascript:", "<use", "<image", "feImage", "<animate", "<set", "<a", "href", "background", "@import"]
+      .filter((s) => r.svg.includes(s)).map((s) => `${name}: ${s}`));
+  const svgRefused = Object.fromEntries(Object.entries(svgResults).filter(([, r]) => !r.ok).map(([name, r]) => [name, r.reason]));
+  check("diagram SVG: scripts, handlers, references, and animations are removed", svgLeaks.length === 0 &&
+    ["script", "onload", "use", "image", "animate", "remoteFill"].every((n) => svgResults[n].ok) &&
+    svgResults.remoteFill.svg.includes('marker-end="url(#m)"'),
+    JSON.stringify({ svgLeaks, remoteFill: svgResults.remoteFill.svg }));
+  check("diagram SVG: loading styles, HTML labels, and bad roots or sizes are refused",
+    JSON.stringify(svgRefused) === JSON.stringify({
+      importStyle: "unsafe-output", urlStyle: "unsafe-output", escapedStyle: "unsafe-output", foreignObject: "unsupported",
+      notSvg: "unsafe-output", twoRoots: "unsafe-output", noViewBox: "unsafe-output", hugeViewBox: "unsafe-output", nanViewBox: "unsafe-output",
+    }), JSON.stringify(svgRefused));
+
   const huge = await page.evaluate(() => {
     const body = Array.from({ length: 1999 }, () => "| 1 | 2 | 3 |").join("\n");
     window.__ov.load(`| a | b | c |\n|---|---|---|\n${body}\n\nEND`);

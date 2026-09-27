@@ -55,6 +55,15 @@
             <p class="prefs-help">Turn this on only if you trust the documents you open. When it’s off, a web image shows
               as a note naming its server, and export leaves it out. Images stored with the document always show.</p>
           </section>
+          <section class="prefs-group">
+            <h2>Diagrams</h2>
+            <label class="prefs-choice"><input id="diagrams" type="checkbox" />
+              <span><strong class="prefs-plain">Draw Mermaid diagrams</strong> <span class="prefs-choice-note">on by default</span></span></label>
+            <p class="prefs-help">A <code>```mermaid</code> code block is drawn as a picture. Drawing happens inside a
+              sealed-off part of the app with no network access, and the result is shown as an image. A badly made
+              diagram can still freeze its window; if one does, OpenViewer shows its code the next time instead of
+              drawing it. Turn this off to show every diagram as code.</p>
+          </section>
         </div>
       </main>
     </div>

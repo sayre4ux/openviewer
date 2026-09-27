@@ -48,7 +48,16 @@ const highlighted = await page.evaluate(() => document.querySelectorAll(".cm-md-
 check("editor renders under CSP", serif && highlighted > 0, `PT Serif ${serif}, highlighted spans ${highlighted}`);
 
 // Math: KaTeX, its stylesheet, and its fonts load lazily, as chunks and assets from our own origin.
-await page.evaluate(() => window.__ov.load("Inline $e^{i\\pi}+1=0$ and $\\sqrt{x}$.\n\n$$\n\\int_0^1 \\frac{\\sqrt{x}}{\\mathcal{L}}\\,dx\n$$\n\n"));
+// Diagrams: the sandboxed frame loads Mermaid's single file under both the app's policy (sent as a
+// header here, as Tauri does) and its own; this listener runs in the frame too, so a violation there
+// counts as well.
+await page.evaluate(() => window.__ov.load("Inline $e^{i\\pi}+1=0$ and $\\sqrt{x}$.\n\n$$\n\\int_0^1 \\frac{\\sqrt{x}}{\\mathcal{L}}\\,dx\n$$\n\n```mermaid\nsequenceDiagram\n  Alice->>Bob: Hello\n```\n\n"));
+await page.waitForSelector(".cm-md-diagram-image", { timeout: 15000 }).catch(() => {});
+const diagram = await page.evaluate(() => {
+  const img = document.querySelector(".cm-md-diagram-image");
+  return { image: Boolean(img?.getAttribute("src")?.startsWith("data:image/svg+xml;base64,")), frame: document.querySelector("iframe")?.getAttribute("sandbox") ?? null };
+});
+check("a diagram renders under CSP, through the sandboxed frame", diagram.image && diagram.frame === "allow-scripts", JSON.stringify(diagram));
 await page.waitForFunction(() => document.querySelectorAll(".cm-md-math .katex, .cm-md-math-block .katex").length === 3, null, { timeout: 10000 }).catch(() => {});
 await page.evaluate(() => document.fonts.ready);
 const math = await page.evaluate(() => ({
@@ -70,6 +79,37 @@ const commandCount = JSON.parse(await readFile("src/shared/commands.json", "utf8
 check("preferences render under CSP", (await page.locator(".prefs-row").count()) === commandCount);
 
 check("no CSP violations", violations.length === 0, violations.join(" | "));
+
+// The diagram frame's own CSP can't stop it navigating itself; the app's default-src 'self' (standing
+// in for frame-src) does. A frame made to navigate to another origin, by script or a meta refresh,
+// must not reach it, and the editor drops the frame. (Violations are expected on this page.)
+{
+  const trapped = [];
+  const trap = createServer((req, res) => { trapped.push(req.url); res.writeHead(200, { "Content-Type": "text/html" }).end("trap"); });
+  await new Promise((ok) => trap.listen(0, "127.0.0.1", ok));
+  const trapUrl = `http://127.0.0.1:${trap.address().port}`;
+  const nav = await browser.newPage();
+  await nav.goto(base);
+  await nav.waitForSelector(".cm-content");
+  const outcomes = [];
+  for (const how of ["location", "meta"]) {
+    await nav.evaluate((how) => { window.__ov.load(`\`\`\`mermaid\nflowchart LR\n  ${how} --> B\n\`\`\`\n\nx\n`); const v = window.__ov.view; v.dispatch({ selection: { anchor: v.state.doc.length } }); }, how);
+    await nav.waitForSelector(".cm-md-diagram-image", { timeout: 15000 }).catch(() => {});
+    const frame = nav.frames().find((f) => f.url().endsWith("/diagram/frame.html"));
+    await frame?.evaluate(({ how, url }) => {
+      if (how === "location") location.href = url;
+      else { const m = document.createElement("meta"); m.httpEquiv = "refresh"; m.content = `0;url=${url}`; document.head.appendChild(m); }
+    }, { how, url: `${trapUrl}/${how}` }).catch(() => {});
+    await nav.waitForTimeout(1000);
+    outcomes.push({ how, frameFound: Boolean(frame), framesLeft: await nav.evaluate(() => document.querySelectorAll("iframe").length) });
+  }
+  await nav.evaluate(() => { window.__ov.load("```mermaid\nflowchart LR\n  After --> Navigation\n```\n\nx\n"); const v = window.__ov.view; v.dispatch({ selection: { anchor: v.state.doc.length } }); });
+  const recovered = await nav.waitForSelector(".cm-md-diagram-image", { timeout: 15000 }).then(() => true, () => false);
+  check("the diagram frame can't navigate off our origin, and is dropped if it tries",
+    trapped.length === 0 && outcomes.every((o) => o.frameFound && o.framesLeft === 0) && recovered, JSON.stringify({ trapped, outcomes, recovered }));
+  await nav.close();
+  trap.close();
+}
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();
 server.close();

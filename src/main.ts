@@ -9,7 +9,7 @@ import { createOutline } from "./app/outline";
 import { localImageCandidate, resolveClose, type ShellDocument, startShell, type ViewChecks } from "./app/shell";
 import { createWordCount } from "./app/wordCount";
 import { isInsertableImage, pastedImageName } from "./app/imageNames";
-import { mathCutoff } from "./editor/blocks";
+import { blockStats, mathCutoff, prerenderDiagrams, refreshRendering } from "./editor/blocks";
 import { codeHighlight } from "./editor/codeHighlight";
 import { headingSlugs, scrollToAnchor } from "./editor/anchors";
 import { findCommands, findExtension } from "./editor/find";
@@ -22,6 +22,7 @@ import { imageUrlAllowed, livePreview, refreshImageResolver, setImageResolver, s
 import { mathSyntax } from "./editor/math";
 import { formatInCell, insertTable, setCellKeys, tableRenderStats } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
+import { checkReply, diagramHash, diagramState, renderDiagram, resetDiagrams, sanitizeDiagram, setDiagramsEnabled } from "./render/diagram";
 import { katexOutput, loadMath, mathStats, renderMath } from "./render/math";
 import sample from "./sample.md?raw";
 import { createKeybindingStore } from "./shared/keybindings";
@@ -166,8 +167,14 @@ let currentPath: string | null = null;
 let hasBom = false;
 const load = (text: string, path: string | null = null, bom = false, fileEncoding = "UTF-8") => {
   encoding = fileEncoding;
+  // A new document gets a new diagram frame; nothing from the last one carries over.
+  // DECISION: here rather than in shell.ts, so the app and the browser build's test hook reset alike.
+  resetDiagrams();
   replaceDocument(view, text, extensionsForDocument());
   savedDoc = view.state.doc;
+  const loaded = savedDoc;
+  // DECISION: not in source mode, which draws nothing; diagrams then render when it is turned off.
+  if (!modes.source) void prerenderDiagrams(view.state, () => view.state.doc.eq(loaded));
   currentPath = path;
   hasBom = bom;
   outline.refresh();
@@ -306,6 +313,7 @@ const doc: ShellDocument = {
   snapshot: () => ({ text: view.state.sliceDoc(), doc: view.state.doc }),
   saved: (next) => { savedDoc = next; },
   refreshImages: () => refreshImageResolver(view),
+  refreshRendering: () => refreshRendering(view),
   scrollToAnchor: (fragment) => scrollToAnchor(view, fragment),
   onChange: (callback) => { documentChanged = callback; },
 };
@@ -336,6 +344,17 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   htmlToMarkdown,
   // The app reads this from settings.json; off by default, as there.
   setRemoteImages: (on: boolean) => { setRemoteImages(view, on); },
+  // The app reads this from settings.json; on by default, as there.
+  setDiagrams: (on: boolean) => { if (setDiagramsEnabled(on)) refreshRendering(view); },
+  // Diagram internals for check-diagrams: the renderer, the reply check, the sanitizer, the guard's hash.
+  diagram: {
+    render: (source: string, force = false) => renderDiagram(source, { force }),
+    checkReply,
+    sanitize: sanitizeDiagram,
+    hash: diagramHash,
+    state: diagramState,
+    blocks: () => blockStats(view.state),
+  },
   localImageCandidate,
   pastedImageName,
   insertImages: (markdown: string, at?: number) => doc.insertImages(markdown, at),
@@ -348,13 +367,13 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
     refreshImageResolver(view);
   },
   // Renders an export page; local images come back as their alt text (there's no Rust here).
-  renderExport: async (markdown: string, withFonts = false, remote = true) => {
+  renderExport: async (markdown: string, withFonts = false, remote = true, budget = 3 * 62) => {
     const { renderExport, loadFonts } = await import("./export/render");
     return renderExport(markdown, {
       name: "Test", remoteAllowed: remote ? imageUrlAllowed : () => false,
-      // "assets/big.png" stands in for a local image Rust would embed; the budget fits three copies.
+      // "assets/big.png" stands in for a local image Rust would embed; the default budget fits three copies.
       embedImage: async (src) => (src === "assets/big.png" ? `data:image/png;base64,${"A".repeat(40)}` : null),
-      embedBudget: 3 * 62,
+      embedBudget: budget,
       fonts: withFonts ? await loadFonts() : undefined,
     });
   },

@@ -24,11 +24,14 @@ and read in one view, and Markdown syntax disappears once you finish typing it.
 - **Math.** `$…$` inline and `$$` blocks render with KaTeX as you leave them, and show their TeX
   again when the cursor goes back in. Prices like `$5 and $10` stay text. Export keeps the formulas,
   with KaTeX's fonts embedded.
+- **Mermaid diagrams.** A ` ```mermaid ` block is drawn as a picture (flowcharts, sequence, class,
+  state, ER, Gantt, and pie charts) and shows its code when you click it. Diagrams are drawn in a
+  sealed-off frame with no network access and shown as images; Settings → Images can turn them off.
 - **Outline sidebar** (⇧⌘L), **focus mode** (F8), **typewriter mode** (F9), and a word count that
   counts Chinese, Japanese, and Korean characters as words.
 - **Custom shortcuts.** Settings (⌘,) lets you record a new shortcut for any menu or formatting
   command. They are saved to `keybindings.json`, which you can also edit by hand.
-- Small and native: about 13 MB, one document per window, native menus and dialogs, and "Open With"
+- Small and native: about 14 MB, one document per window, native menus and dialogs, and "Open With"
   from Finder.
 
 ## Build and run
@@ -86,7 +89,9 @@ OpenViewer treats every Markdown file as untrusted. The app can read and write o
 (Open, Save As, drag and drop, or Open With), local images load only from the document's folder or git
 repository (other folders only after you allow them), images from your local network are blocked, and a strict Content-Security-Policy applies.
 Images from the internet don't load unless you turn them on in Settings → Images, because loading one
-tells its server that you opened the document.
+tells its server that you opened the document. Formulas can't make links or load images, and Mermaid
+diagrams are drawn in a sandboxed frame with no network access and shown only as images. A diagram
+that freezes the app is shown as code the next time, with a button to try again.
 
 ## How it works
 
@@ -105,7 +110,6 @@ Before the first release:
 After the first release:
 
 - Dark mode
-- Mermaid diagrams
 - A file tree sidebar
 - A choice of spellcheck language
 - Windows support
@@ -119,4 +123,5 @@ After the first release:
 - The look follows Typora's Newsprint theme. The CSS here is written from scratch.
 - [PT Serif](https://fonts.google.com/specimen/PT+Serif) by ParaType, bundled under the
   [SIL Open Font License](public/fonts/OFL.txt).
-- Built with Tauri, CodeMirror, Lezer, and [KaTeX](https://katex.org), whose fonts are bundled.
+- Built with Tauri, CodeMirror, Lezer, [KaTeX](https://katex.org) (whose fonts are bundled), and
+  [Mermaid](https://mermaid.js.org).

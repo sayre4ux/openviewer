@@ -1,5 +1,6 @@
 import type { Text } from "@codemirror/state";
 import { imageUrlAllowed, isRemoteImage, remoteImagesAllowed, setImageResolver, setRemoteImages } from "../editor/livePreview";
+import { setDiagramsEnabled } from "../render/diagram";
 import { lineEndings } from "./document";
 import { pastedImageName } from "./imageNames";
 
@@ -16,6 +17,8 @@ export interface ShellDocument {
   snapshot(): { text: string; doc: Text };
   saved(doc: Text): void;
   refreshImages(): void;
+  // Redraw formulas and diagrams, after a setting that affects them changed.
+  refreshRendering(): void;
   // Scroll to a heading by its GitHub-style id; false when there is none.
   scrollToAnchor(fragment: string): boolean;
   // Insert image links at a document position (or the selection) as one undoable edit.
@@ -245,16 +248,22 @@ export async function startShell(
   );
 
   // Remote images stay off until the setting says otherwise; read before the first load so a document
-  // never shows them for a moment when they're off.
-  // Only a change to remote images re-renders images; the folder setting doesn't affect them.
-  const applySettings = (s: { remoteImages?: boolean }) => {
+  // never shows them for a moment when they're off. Diagrams are on unless turned off (the switch
+  // exists for the day Mermaid has a flaw with no fix); read first too, so a diagram never renders
+  // when they're off.
+  // Only a change to one of these re-renders; the folder setting doesn't affect them.
+  type RenderSettings = { remoteImages?: boolean; diagrams?: boolean };
+  const applySettings = (s: RenderSettings) => {
     if (setRemoteImages(null, s.remoteImages === true)) doc.refreshImages();
+    if (setDiagramsEnabled(s.diagrams !== false)) doc.refreshRendering();
   };
   const { listen } = await import("@tauri-apps/api/event");
   // Listening before the first load: a startup sheet (encoding, line endings) must not hide a change.
   // Broadcast by Rust when the Settings window changes one.
-  await listen<{ remoteImages?: boolean }>("settings-changed", ({ payload }) => applySettings(payload));
-  await call<{ remoteImages?: boolean }>("get_settings").then(applySettings).catch(() => {});
+  await listen<RenderSettings>("settings-changed", ({ payload }) => applySettings(payload));
+  // Settings that can't be read fail closed: no remote images, and diagrams off (the switch is a
+  // safety valve, so an unknown value means off).
+  await call<RenderSettings>("get_settings").then(applySettings).catch(() => applySettings({ remoteImages: false, diagrams: false }));
 
   // Set before the first load so images in the startup document resolve on first render.
   setImageResolver((src) => {

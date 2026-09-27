@@ -24,7 +24,7 @@
     "security": {
       "csp": {
         "default-src": "'self'",
-        "script-src": "'self'",
+        "script-src": "'self' tauri://localhost",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' ovimg: http://ovimg.localhost https: http: data: blob:",
         "font-src": "'self' data:",

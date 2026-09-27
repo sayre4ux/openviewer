@@ -1,9 +1,9 @@
-// Settings → Images: where pasted and dropped images are copied, and whether images from the
-// internet load. In the app this is settings.json (read and written by Rust, which only accepts the
-// three listed folders); in the browser build it's localStorage, for tests.
+// Settings → Images: where pasted and dropped images are copied, whether images from the internet
+// load, and whether Mermaid diagrams are drawn. In the app this is settings.json (read and written by
+// Rust, which only accepts the three listed folders); in the browser build it's localStorage, for tests.
 
-type Settings = { imageFolder: string; remoteImages: boolean };
-const DEFAULTS: Settings = { imageFolder: "assets", remoteImages: false };
+type Settings = { imageFolder: string; remoteImages: boolean; diagrams: boolean };
+const DEFAULTS: Settings = { imageFolder: "assets", remoteImages: false, diagrams: true };
 
 const native = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 const KEY = "openviewer.settings";
@@ -39,6 +39,7 @@ async function store(settings: Settings): Promise<Settings> {
 export function setupImagesPane() {
   const group = document.getElementById("image-folder")!;
   const remote = document.getElementById("remote-images") as HTMLInputElement;
+  const diagrams = document.getElementById("diagrams") as HTMLInputElement;
   const radios = () => Array.from(group.querySelectorAll<HTMLInputElement>("input[type=radio]"));
   // Every write sends the whole settings object, so changing one never resets the other.
   let current: Settings = { ...DEFAULTS };
@@ -46,10 +47,11 @@ export function setupImagesPane() {
     current = { ...DEFAULTS, ...s };
     for (const r of radios()) r.checked = r.value === current.imageFolder;
     remote.checked = current.remoteImages === true;
+    diagrams.checked = current.diagrams !== false;
   };
   // Enabled only while `current` holds the saved settings. A write sends the whole object, so a click
   // before they arrive, or after reading them failed, would put the defaults over them.
-  const enable = (on: boolean) => { for (const c of [...radios(), remote]) c.disabled = !on; };
+  const enable = (on: boolean) => { for (const c of [...radios(), remote, diagrams]) c.disabled = !on; };
   const reload = async () => {
     try {
       show(await load());
@@ -67,6 +69,7 @@ export function setupImagesPane() {
   };
   group.addEventListener("change", (e) => void update({ imageFolder: (e.target as HTMLInputElement).value }));
   remote.addEventListener("change", () => void update({ remoteImages: remote.checked }));
+  diagrams.addEventListener("change", () => void update({ diagrams: diagrams.checked }));
   enable(false);
   void reload();
   if (native) {

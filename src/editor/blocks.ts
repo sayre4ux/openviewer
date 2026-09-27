@@ -1,15 +1,18 @@
-import { syntaxTree } from "@codemirror/language";
-import { type EditorState, type Extension, type Range, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
-import type { SyntaxNode } from "@lezer/common";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { type EditorState, type Extension, Prec, type Range, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
+import type { SyntaxNode, Tree } from "@lezer/common";
+import {
+  cachedDiagram, type DiagramResult, diagramGeneration, diagramsEnabled, MAX_DIAGRAMS, renderDiagram,
+} from "../render/diagram";
 import { loadMath, MAX_FORMULAS, mathFragment, mathReady, renderMath } from "../render/math";
 import { displayMathSource } from "./math";
 import { frozenChanged, touches } from "./reveal";
 
-// Display math rendered in place of its source, as a block widget. Block widgets span lines, so they
-// come from a state field (as tables do), not from the live-preview view plugin. A block shows its
-// source while a selection touches any of its lines; clicking the rendering puts the caret there.
-// Rendering is decoration only: nothing here changes the document.
+// Display math and Mermaid diagrams rendered in place of their source, as block widgets. Block widgets
+// span lines, so they come from a state field (as tables do), not from the live-preview view plugin. A
+// block shows its source while a selection touches any of its lines; clicking the rendering puts the
+// caret there. Rendering is decoration only: nothing here changes the document.
 
 type Container = "quote" | "list";
 
@@ -24,6 +27,7 @@ interface Block {
 
 interface Blocks {
   math: Block[];
+  diagrams: Block[];
   // Formulas from this position on stay as source (the document's formula budget is spent).
   cutoff: number;
   hasMath: boolean;
@@ -31,10 +35,13 @@ interface Blocks {
   shown: Set<number>;
 }
 
-// Dispatched when a renderer finishes loading, so waiting formulas render.
+// Dispatched when a renderer finishes loading or a setting changes, so blocks render again.
 const refresh = StateEffect.define<null>();
 export function renderRefreshed(u: ViewUpdate): boolean {
   return u.transactions.some((tr) => tr.effects.some((e) => e.is(refresh)));
+}
+export function refreshRendering(view: EditorView) {
+  view.dispatch({ effects: refresh.of(null) });
 }
 
 function containersOf(state: EditorState, node: SyntaxNode): { containers: Container[]; marker: string | null } {
@@ -62,16 +69,48 @@ function block(state: EditorState, node: SyntaxNode, source: string): Block {
   };
 }
 
-// Nodes whose insides never hold math.
-const opaque = new Set(["FencedCode", "CodeBlock", "HTMLBlock", "Table", "CommentBlock", "ProcessingInstructionBlock"]);
+// The code inside a closed ```mermaid fence (the info string, trimmed, is "mermaid" in any case), or
+// null. Container markers (a quote's `>`) and the indentation all lines share are left out.
+function mermaidSource(state: EditorState, node: SyntaxNode): string | null {
+  const open = node.firstChild;
+  const close = node.lastChild;
+  if (open?.name !== "CodeMark" || close?.name !== "CodeMark" || close.from <= open.to) return null;
+  const info = node.getChild("CodeInfo");
+  if (!info || state.sliceDoc(info.from, info.to).trim().toLowerCase() !== "mermaid") return null;
+  const doc = state.doc;
+  const first = doc.lineAt(open.from).number + 1;
+  const last = doc.lineAt(close.from).number - 1;
+  const quoteEnds = new Map<number, number>();
+  for (let c = node.firstChild; c; c = c.nextSibling) {
+    if (c.name === "QuoteMark") quoteEnds.set(doc.lineAt(c.from).number, doc.sliceString(c.to, c.to + 1) === " " ? c.to + 1 : c.to);
+  }
+  const lines: string[] = [];
+  for (let n = first; n <= last; n++) {
+    const line = doc.line(n);
+    lines.push(doc.sliceString(quoteEnds.get(n) ?? line.from, line.to));
+  }
+  const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => /^[ \t]*/.exec(l)![0].length));
+  return (Number.isFinite(indent) && indent > 0 ? lines.map((l) => l.slice(Math.min(indent, /^[ \t]*/.exec(l)![0].length))) : lines).join("\n");
+}
 
-function scan(state: EditorState): Omit<Blocks, "decorations" | "shown"> {
+// Nodes whose insides never hold math.
+// DECISION: math inside table cells stays source in this release. Cells render through `renderInline`
+// in tables.ts, a regex renderer feeding innerHTML; routing KaTeX through it is a separate change.
+const opaque = new Set(["CodeBlock", "HTMLBlock", "Table", "CommentBlock", "ProcessingInstructionBlock"]);
+
+function scan(state: EditorState, tree: Tree = syntaxTree(state)): Omit<Blocks, "decorations" | "shown"> {
   const math: Block[] = [];
+  const diagrams: Block[] = [];
   let formulas = 0;
   let cutoff = Infinity;
-  syntaxTree(state).iterate({
+  tree.iterate({
     enter: (ref) => {
       const name = ref.name;
+      if (name === "FencedCode") {
+        const source = diagrams.length < MAX_DIAGRAMS ? mermaidSource(state, ref.node) : null;
+        if (source !== null) diagrams.push(block(state, ref.node, source));
+        return false;
+      }
       if (opaque.has(name)) return false;
       if (name !== "InlineMath" && name !== "DisplayMath") return;
       formulas++;
@@ -80,7 +119,7 @@ function scan(state: EditorState): Omit<Blocks, "decorations" | "shown"> {
       return false;
     },
   });
-  return { math, cutoff, hasMath: formulas > 0 };
+  return { math, diagrams, cutoff, hasMath: formulas > 0 };
 }
 
 function decorate(state: EditorState, found: Omit<Blocks, "decorations" | "shown">): Blocks {
@@ -93,7 +132,30 @@ function decorate(state: EditorState, found: Omit<Blocks, "decorations" | "shown
       shown.add(b.node);
     }
   }
+  if (diagramsEnabled()) {
+    for (const b of found.diagrams) {
+      if (touches(state, b.from, b.to)) continue;
+      out.push(Decoration.replace({ widget: new DiagramWidget(b), block: true }).range(b.from, b.to));
+      shown.add(b.node);
+    }
+  }
   return { ...found, decorations: Decoration.set(out, true), shown };
+}
+
+// Renders a freshly opened document's first diagrams, in order, while it has no edits to lose.
+// DECISION: the first 20, for at most 2 seconds, and only while the document is clean. Mermaid can't
+// be interrupted, so if one of them freezes the window, it happens before anything was typed; the
+// hang guard then blocks it on the next launch.
+export async function prerenderDiagrams(state: EditorState, stillClean: () => boolean) {
+  if (!diagramsEnabled()) return;
+  const generation = diagramGeneration();
+  const tree = ensureSyntaxTree(state, state.doc.length, 200) ?? syntaxTree(state);
+  const sources = scan(state, tree).diagrams.slice(0, 20).map((b) => b.source);
+  const started = performance.now();
+  for (const source of sources) {
+    if (performance.now() - started > 2000 || generation !== diagramGeneration() || !stillClean()) return;
+    await renderDiagram(source);
+  }
 }
 
 const blocksField = StateField.define<Blocks>({
@@ -109,6 +171,12 @@ const blocksField = StateField.define<Blocks>({
 // Whether the block whose syntax node starts at `from` is showing its rendering.
 export function isRenderedBlock(state: EditorState, from: number): boolean {
   return state.field(blocksField, false)?.shown.has(from) ?? false;
+}
+
+// For the browser test hook: what the field found and what it is showing rendered.
+export function blockStats(state: EditorState) {
+  const b = state.field(blocksField, false);
+  return b ? { math: b.math.length, diagrams: b.diagrams.length, shown: b.shown.size } : null;
 }
 
 export function mathCutoff(state: EditorState): number {
@@ -217,4 +285,116 @@ class DisplayMathWidget extends WidgetType {
   }
 }
 
-export const blockPreview: Extension = [blocksField, mathLoader];
+// A Mermaid diagram: the renderer's image, or the code and why it isn't a picture. The widget's root
+// stays put and only its contents change when the render arrives, as with images.
+class DiagramWidget extends WidgetType {
+  constructor(readonly block: Block) {
+    super();
+  }
+  eq(other: DiagramWidget) {
+    return sameFrame(other.block, this.block);
+  }
+  get estimatedHeight() {
+    const hit = cachedDiagram(this.block.source);
+    return hit?.ok ? hit.height + 16 : 160;
+  }
+  toDOM(view: EditorView) {
+    const { wrap, inner } = frame(this.block, "cm-md-diagram");
+    const box = document.createElement("div");
+    box.className = "cm-md-diagram-box";
+    inner.appendChild(box);
+    const source = this.block.source;
+    const show = (result: DiagramResult) => {
+      if (result.ok && result.dataUrl.startsWith("data:image/svg+xml;base64,")) {
+        const img = document.createElement("img");
+        img.className = "cm-md-diagram-image";
+        img.alt = "Mermaid diagram";
+        img.addEventListener("error", () => box.replaceChildren(failureNode(source, "the diagram's image couldn't be shown")), { once: true });
+        img.width = result.width;
+        img.height = result.height;
+        img.src = result.dataUrl;
+        box.replaceChildren(img);
+      } else if (!result.ok) {
+        const failed = failureNode(source, result.message);
+        if (result.reason === "blocked") {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "cm-md-render-anyway";
+          button.textContent = "Render anyway";
+          button.addEventListener("mousedown", (e) => e.preventDefault()); // keep the editor selection
+          button.addEventListener("click", () => {
+            box.replaceChildren(pendingNode());
+            void renderDiagram(source, { force: true }).then(show);
+          });
+          failed.appendChild(button);
+        }
+        box.replaceChildren(failed);
+      }
+      view.requestMeasure();
+    };
+    const hit = cachedDiagram(source);
+    if (hit) {
+      show(hit);
+    } else {
+      box.appendChild(pendingNode());
+      void renderDiagram(source).then(show);
+    }
+    revealOnClick(view, wrap);
+    return wrap;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+function pendingNode() {
+  const note = document.createElement("div");
+  note.className = "cm-md-diagram-pending";
+  note.textContent = "Rendering diagram…";
+  return note;
+}
+
+// The line ranges of the blocks showing a rendering, in document order.
+function shownRanges(state: EditorState): { from: number; to: number }[] {
+  const out: { from: number; to: number }[] = [];
+  const cursor = state.field(blocksField).decorations.iter();
+  for (; cursor.value; cursor.next()) out.push({ from: cursor.from, to: cursor.to });
+  return out;
+}
+
+// Arrow keys move onto a rendered block (which shows its source) instead of jumping over it, and
+// Backspace at the start of the line below one shows it rather than joining that line to its closing
+// fence. Where the caret would go is CodeMirror's own vertical motion, so wrapped lines move as usual.
+function enterBlock(forward: boolean) {
+  return (view: EditorView) => {
+    const range = view.state.selection.main;
+    if (!range.empty || view.state.selection.ranges.length > 1) return false;
+    const head = range.head;
+    const target = view.moveVertically(range, forward).head;
+    const blocks = shownRanges(view.state);
+    const hit = forward
+      ? blocks.find((b) => b.from > head && target >= b.from)
+      : blocks.reverse().find((b) => b.to < head && target <= b.to);
+    if (!hit) return false;
+    view.dispatch({ selection: { anchor: forward ? hit.from : hit.to }, scrollIntoView: true });
+    return true;
+  };
+}
+
+const blockKeys = Prec.high(keymap.of([
+  { key: "ArrowDown", run: enterBlock(true) },
+  { key: "ArrowUp", run: enterBlock(false) },
+  {
+    key: "Backspace",
+    run: (view) => {
+      const range = view.state.selection.main;
+      if (!range.empty || view.state.selection.ranges.length > 1) return false;
+      const above = shownRanges(view.state).find((b) => b.to + 1 === range.head && view.state.doc.lineAt(range.head).from === range.head);
+      if (!above) return false;
+      view.dispatch({ selection: { anchor: above.to } });
+      return true;
+    },
+  },
+]));
+
+export const blockPreview: Extension = [blocksField, mathLoader, blockKeys];

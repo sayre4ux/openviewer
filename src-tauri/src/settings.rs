@@ -21,15 +21,24 @@ pub struct Settings {
   // server who opened the document, from where, and when.
   #[serde(default)]
   pub remote_images: bool,
+  // Mermaid diagrams. On unless the user turns them off: rendering leaks nothing (it runs in a
+  // sandboxed frame with no network, and the result is an image), so the switch exists for the day a
+  // Mermaid flaw has no fix. Changing the default is this one line.
+  #[serde(default = "yes")]
+  pub diagrams: bool,
 }
 
 fn default_image_folder() -> String {
   "assets".into()
 }
 
+fn yes() -> bool {
+  true
+}
+
 impl Default for Settings {
   fn default() -> Self {
-    Settings { image_folder: default_image_folder(), remote_images: false }
+    Settings { image_folder: default_image_folder(), remote_images: false, diagrams: yes() }
   }
 }
 
@@ -101,5 +110,17 @@ mod tests {
     let s: Settings = serde_json::from_str(r#"{"remoteImages":true}"#).unwrap();
     assert!(s.sanitized().remote_images);
     assert!(serde_json::from_str::<Settings>(r#"{"remoteImages":"yes"}"#).is_err());
+  }
+
+  #[test]
+  fn diagrams_default_on() {
+    assert!(Settings::default().diagrams);
+    let s: Settings = serde_json::from_str(r#"{"imageFolder":"."}"#).unwrap();
+    assert!(s.diagrams);
+    let s: Settings = serde_json::from_str(r#"{"diagrams":false}"#).unwrap();
+    assert!(!s.sanitized().diagrams);
+    assert!(serde_json::from_str::<Settings>(r#"{"diagrams":"no"}"#).is_err());
+    let text = serde_json::to_string(&Settings::default()).unwrap();
+    assert!(text.contains(r#""diagrams":true"#), "{text}");
   }
 }

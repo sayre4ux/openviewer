@@ -145,6 +145,18 @@ const savedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem(
 check("remote images choice kept with the folder", savedSettings.remoteImages === true && savedSettings.imageFolder === "{name}.assets",
   JSON.stringify(savedSettings));
 
+// Diagrams: on by default, and turning them off keeps the other choices.
+await page.click('.prefs-tab[data-pane="images"]'); await settle();
+check("diagrams default on", await page.isChecked("#diagrams"));
+await page.click("#diagrams"); await settle();
+await page.reload(); await page.waitForSelector(".prefs-row"); await settle();
+await page.click('.prefs-tab[data-pane="images"]'); await settle();
+const diagramSettings = await page.evaluate(() => JSON.parse(localStorage.getItem("openviewer.settings") ?? "{}"));
+check("diagrams choice kept with the others",
+  diagramSettings.diagrams === false && diagramSettings.remoteImages === true && diagramSettings.imageFolder === "{name}.assets" && !(await page.isChecked("#diagrams")),
+  JSON.stringify(diagramSettings));
+await page.screenshot({ path: `${out}/p6-diagrams.png`, fullPage: true });
+
 // Undo rebound onto a key cells use for navigation still undoes in a cell.
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ undo: "Cmd+Left" })));
 await page.setViewportSize({ width: 1100, height: 700 });
@@ -167,20 +179,22 @@ for (const hook of [{ delay: 600 }, { fail: true }]) {
   await p.click('.prefs-tab[data-pane="images"]');
   const early = await p.evaluate(() => ({
     remote: document.getElementById("remote-images").disabled,
+    diagrams: document.getElementById("diagrams").disabled,
     folder: document.querySelector('input[name="image-folder"][value="assets"]').disabled,
   }));
   await p.waitForTimeout(900);
   const later = await p.evaluate(() => ({
     remote: document.getElementById("remote-images").disabled,
+    diagrams: document.getElementById("diagrams").disabled,
     checked: document.getElementById("remote-images").checked,
     folder: document.querySelector('input[name="image-folder"]:checked')?.value ?? null,
   }));
   if (hook.delay) {
     check("settings controls wait for the saved settings",
-      early.remote && early.folder && !later.remote && later.checked && later.folder === ".", JSON.stringify({ early, later }));
+      early.remote && early.diagrams && early.folder && !later.remote && !later.diagrams && later.checked && later.folder === ".", JSON.stringify({ early, later }));
   } else {
     check("settings controls stay disabled when reading them fails",
-      early.remote && later.remote, JSON.stringify({ early, later }));
+      early.remote && later.remote && later.diagrams, JSON.stringify({ early, later }));
   }
   await p.close();
 }

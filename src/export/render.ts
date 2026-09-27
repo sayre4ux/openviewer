@@ -3,8 +3,9 @@ import { languages } from "@codemirror/language-data";
 import { highlightCode, tagHighlighter, tags as t } from "@lezer/highlight";
 import DOMPurify from "dompurify";
 import katexCss from "katex/dist/katex.min.css?raw";
-import { Marked, type TokenizerAndRendererExtension, type Tokens } from "marked";
+import { Marked, type Token, type TokenizerAndRendererExtension, type Tokens } from "marked";
 import { inlineMathClose, inlineMathOpens, isDisplayFence, startsBlock } from "../editor/math";
+import { type DiagramResult, diagramsEnabled, MAX_DIAGRAMS, renderDiagram } from "../render/diagram";
 import { loads } from "../render/loads";
 import { loadMath, MAX_FORMULAS, type MathKind, mathReady, renderMath } from "../render/math";
 import exportCss from "./export.css?raw";
@@ -96,6 +97,29 @@ function mathExtensions(state: { formulas: number; used: boolean }): TokenizerAn
       renderer: (token) => html((token as MathToken).tex, "inline"),
     },
   ];
+}
+
+// Mermaid blocks become images, rendered in document order before the page is built: the same
+// renderer and image as the editor. A diagram that fails, or any diagram while they're off, exports as
+// the code block it is. The same editor rules decide what's a diagram: a closed fence whose info
+// string is exactly "mermaid".
+const EXPORT_DIAGRAM_TIME = 30000;
+async function exportDiagrams(marked: Marked, tokens: Token[]): Promise<Map<Token, DiagramResult>> {
+  const results = new Map<Token, DiagramResult>();
+  if (!diagramsEnabled()) return results;
+  const blocks: Tokens.Code[] = [];
+  marked.walkTokens(tokens, (token) => {
+    if (token.type !== "code") return;
+    const code = token as Tokens.Code;
+    if (code.codeBlockStyle === "indented" || (code.lang ?? "").trim().toLowerCase() !== "mermaid") return;
+    if (/\n[ \t]{0,3}(`{3,}|~{3,})[ \t]*\n*$/.test(code.raw)) blocks.push(code);
+  });
+  const started = performance.now();
+  for (const block of blocks.slice(0, MAX_DIAGRAMS)) {
+    if (performance.now() - started > EXPORT_DIAGRAM_TIME) break;
+    results.set(block, await renderDiagram(block.text));
+  }
+  return results;
 }
 
 // Code token classes, the same palette as the editor's code card (codeHighlight.ts).
@@ -201,7 +225,18 @@ export async function renderExport(markdown: string, options: ExportOptions): Pr
   if (markdown.includes("$")) await loadMath().catch(() => undefined);
   const marked = new Marked({ gfm: true, breaks: false, async: false });
   if (mathReady()) marked.use({ extensions: mathExtensions(math) });
-  const html = marked.parse(markdown) as string;
+  const tokens = marked.lexer(markdown);
+  const diagrams = await exportDiagrams(marked, tokens);
+  marked.use({
+    renderer: {
+      code(token) {
+        const r = diagrams.get(token);
+        if (!r?.ok) return false; // an ordinary code block
+        return `<p class="ov-diagram"><img src="${r.dataUrl}" alt="Mermaid diagram" width="${r.width}" height="${r.height}"></p>\n`;
+      },
+    },
+  });
+  const html = marked.parser(tokens);
   const purify = DOMPurify();
   // Inline styles stay (colors, alignment) unless they could load something.
   // Only <img src> and <a href> may hold a URL; any other attribute that could load one goes.

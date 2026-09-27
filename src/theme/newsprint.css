@@ -610,6 +610,44 @@ body {
   margin: 0.4em 0 0;
 }
 
+/* ---------- Mermaid diagrams: an image in place of the fence while the caret is elsewhere ---------- */
+
+#editor .cm-md-diagram {
+  position: relative;
+  padding: 0.5em 0;
+  cursor: text;
+}
+#editor .cm-md-diagram-box {
+  text-align: center;
+}
+#editor .cm-md-diagram-image {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  vertical-align: top;
+}
+#editor .cm-md-diagram-pending {
+  padding: 1em 0;
+  font: 12px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color: var(--meta);
+}
+#editor .cm-md-diagram .cm-md-render-failed {
+  text-align: left;
+}
+#editor .cm-md-render-anyway {
+  margin-top: 0.5em;
+  padding: 1px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: #fbfaf7;
+  color: var(--link);
+  font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+  cursor: pointer;
+}
+#editor .cm-md-render-anyway:hover {
+  border-color: var(--link);
+}
+
 /* ---------- Focus mode (F8) and typewriter mode (F9) ---------- */
 
 #editor .ov-focus .cm-line,

@@ -152,6 +152,84 @@ writeFileSync(`${out}/export-math.html`, mathHtml);
   await mathView.close();
 }
 
+// A page with math and diagrams: diagrams are images with SVG data: URLs (the only thing that loads),
+// a broken one is its code block, no scripts, KaTeX's fonts embedded, the CSP unchanged, and it all
+// shows with JavaScript off.
+const bothMd = [
+  "# Both",
+  "",
+  "Energy $E=mc^2$.",
+  "",
+  "```mermaid",
+  "sequenceDiagram",
+  "  Alice->>Bob: $x$ Hello",
+  "  Bob-->>Alice: Hi",
+  "```",
+  "",
+  "> ```mermaid",
+  "> flowchart LR",
+  ">   A[Quoted] --> B",
+  "> ```",
+  "",
+  "```mermaid",
+  "flowchart LR",
+  "  A -->",
+  "```",
+  "",
+  "```js",
+  "const mermaid = 1;",
+  "```",
+].join("\n");
+const bothHtml = await page.evaluate((md) => window.__ov.renderExport(md, true, false, 50 * 1024 * 1024), bothMd);
+const both = await page.evaluate((h) => {
+  const d = new DOMParser().parseFromString(h, "text/html");
+  return {
+    scripts: d.querySelectorAll("script").length,
+    iframes: d.querySelectorAll("iframe, object, embed").length,
+    handlers: [...d.querySelectorAll("*")].some((el) => [...el.attributes].some((a) => a.name.startsWith("on"))),
+    diagrams: [...d.querySelectorAll("p.ov-diagram img")].map((i) => (i.getAttribute("src") ?? "").slice(0, 26)),
+    codeBlocks: [...d.querySelectorAll("pre code")].map((c) => c.textContent.split("\n")[0]),
+    katex: d.querySelectorAll(".katex").length,
+    dataFaces: ([...d.querySelectorAll("style")].map((s) => s.textContent).join("").match(/src:url\(data:font\/woff2;base64,/g) ?? []).length,
+    csp: d.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content") ?? "",
+    loads: [...d.body.querySelectorAll("*")].flatMap((el) => [...el.attributes]
+      .filter((a) => /^(src|srcset|poster|background|href|xlink:href|style|data)$/i.test(a.name) || /url\s*\(|image\s*\(/i.test(a.value))
+      .filter((a) => !(a.name === "style" && !/url\s*\(|image\s*\(/i.test(a.value))) // KaTeX's layout styles
+      .map((a) => `${el.tagName.toLowerCase()}[${a.name}]=${a.value.slice(0, 26)}`)),
+  };
+}, bothHtml);
+check("diagrams export as SVG images; a broken one as its code block",
+  JSON.stringify(both.diagrams) === JSON.stringify(["data:image/svg+xml;base64,", "data:image/svg+xml;base64,"]) &&
+  JSON.stringify(both.codeBlocks) === JSON.stringify(["flowchart LR", "const mermaid = 1;"]) && both.katex === 1,
+  JSON.stringify({ diagrams: both.diagrams, codeBlocks: both.codeBlocks, katex: both.katex }));
+check("math and diagrams: nothing runs, only SVG data: images load, fonts embedded, CSP unchanged",
+  both.scripts === 0 && both.iframes === 0 && !both.handlers && both.loads.every((l) => l === "img[src]=data:image/svg+xml;base64,") && both.loads.length === 2 &&
+  both.dataFaces === 20 && both.csp === "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:",
+  JSON.stringify({ loads: both.loads, dataFaces: both.dataFaces, csp: both.csp }));
+writeFileSync(`${out}/export-both.html`, bothHtml);
+{
+  const bothView = await browser.newPage({ viewport: { width: 900, height: 1100 }, deviceScaleFactor: 2, javaScriptEnabled: false });
+  await bothView.setContent(bothHtml, { waitUntil: "load" });
+  const shown = await bothView.evaluate(() => [...document.querySelectorAll("p.ov-diagram img")].map((i) => i.complete && i.naturalWidth > 0));
+  await bothView.screenshot({ path: `${out}/e4-export-diagrams.png`, fullPage: true });
+  check("diagram images show with JavaScript off", shown.length === 2 && shown.every(Boolean), JSON.stringify(shown));
+  await bothView.close();
+}
+// Diagrams off: every Mermaid block exports as code.
+const offHtml = await page.evaluate(async (md) => {
+  window.__ov.setDiagrams(false);
+  try {
+    return await window.__ov.renderExport(md, false, false, 50 * 1024 * 1024);
+  } finally {
+    window.__ov.setDiagrams(true);
+  }
+}, bothMd);
+const offDiagrams = await page.evaluate((h) => {
+  const d = new DOMParser().parseFromString(h, "text/html");
+  return { images: d.querySelectorAll("img").length, code: d.querySelectorAll("pre code").length };
+}, offHtml);
+check("with diagrams off, export keeps them as code", offDiagrams.images === 0 && offDiagrams.code === 4, JSON.stringify(offDiagrams));
+
 // The look: the sample document with fonts, as a page and as print (Chrome only has page.pdf()).
 const sample = await page.evaluate(() => window.__ov.source);
 const pretty = await page.evaluate((md) => window.__ov.renderExport(md, true), sample);
