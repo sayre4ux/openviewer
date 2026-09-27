@@ -10,7 +10,11 @@ import { localImageCandidate, resolveClose, type ShellDocument, startShell, type
 import { createWordCount } from "./app/wordCount";
 import { isInsertableImage, pastedImageName } from "./app/imageNames";
 import { codeHighlight } from "./editor/codeHighlight";
+import { headingSlugs, scrollToAnchor } from "./editor/anchors";
+import { findCommands, findExtension } from "./editor/find";
+import { foldCommands, headingFolding } from "./editor/folding";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
+import { smartTyping, smartTypingKeymap } from "./editor/smartTyping";
 import { focusMode } from "./editor/focusMode";
 import { imageUrlAllowed, livePreview, refreshImageResolver, setImageResolver, setRemoteImages } from "./editor/livePreview";
 import { formatInCell, insertTable, setCellKeys, tableRenderStats } from "./editor/tables";
@@ -78,6 +82,9 @@ function extensionsForDocument(): Extension[] {
     focusComp.of(modes.focus ? focusMode : []),
     typewriterComp.of(modes.typewriter ? typewriter : []),
     shortcutsComp.of(shortcutKeymap()),
+    findExtension,
+    headingFolding,
+    smartTyping,
     EditorView.domEventHandlers({
       paste: (event) => {
         const files = Array.from(event.clipboardData?.files ?? []).filter((f) => isInsertableImage(f.type));
@@ -89,6 +96,7 @@ function extensionsForDocument(): Extension[] {
     }),
     keymap.of([
       ...typoraKeymap,
+      ...smartTypingKeymap,
       indentWithTab,
       ...baseKeymap,
     ]),
@@ -99,6 +107,30 @@ function extensionsForDocument(): Extension[] {
     }),
   ];
 }
+
+// Zoom scales the root font size; the editor is sized in rem and em, so text, spacing, and the
+// column width scale together. Remembered across launches, like the outline.
+const ZOOM_STEPS = [0.75, 0.85, 0.93, 1, 1.1, 1.2, 1.35, 1.5, 1.75, 2];
+const savedZoom = (() => {
+  try {
+    return Number(localStorage.getItem("openviewer.zoom"));
+  } catch {
+    return NaN;
+  }
+})();
+let zoomIndex = ZOOM_STEPS.includes(savedZoom) ? ZOOM_STEPS.indexOf(savedZoom) : ZOOM_STEPS.indexOf(1);
+const applyZoom = () => {
+  document.documentElement.style.fontSize = `${16 * ZOOM_STEPS[zoomIndex]}px`;
+};
+applyZoom();
+// Another window changed the zoom: follow it (localStorage is shared by the app's windows).
+window.addEventListener("storage", (e) => {
+  const next = ZOOM_STEPS.indexOf(Number(e.newValue));
+  if (e.key !== "openviewer.zoom" || next < 0 || next === zoomIndex) return;
+  zoomIndex = next;
+  applyZoom();
+  view.requestMeasure();
+});
 
 const initial = native ? "" : sample;
 const view = new EditorView({
@@ -152,6 +184,17 @@ function applyChrome() {
   if (modes.wordCount) wordCount.refresh();
 }
 
+function setZoom(index: number) {
+  zoomIndex = Math.max(0, Math.min(ZOOM_STEPS.length - 1, index));
+  applyZoom();
+  try {
+    localStorage.setItem("openviewer.zoom", String(ZOOM_STEPS[zoomIndex]));
+  } catch {
+    // Storage can be unavailable; the zoom just won't persist.
+  }
+  view.requestMeasure();
+}
+
 const commands: Record<string, () => void> = {
   "source-mode": () => {
     modes.source = !modes.source;
@@ -188,12 +231,16 @@ const commands: Record<string, () => void> = {
   "insert-table": () => {
     insertTable(view);
   },
+  ...Object.fromEntries(Object.entries({ ...findCommands, ...foldCommands }).map(([id, command]) => [id, () => { command(view); }])),
+  "zoom-in": () => setZoom(zoomIndex + 1),
+  "zoom-out": () => setZoom(zoomIndex - 1),
+  "actual-size": () => setZoom(ZOOM_STEPS.indexOf(1)),
   // Formatting from the menu or a shortcut; a focused table cell formats its own text.
   ...Object.fromEntries(
     Object.entries(formatCommands).map(([id, command]) => [
       id,
       () => {
-        const marker = { bold: "**", italic: "*", code: "`" }[id];
+        const marker = { bold: "**", italic: "*", strikethrough: "~~", code: "`" }[id];
         if (marker && formatInCell(marker)) return;
         // Headings don't apply inside a table cell, and the editor selection is elsewhere then.
         if (document.activeElement?.classList.contains("cm-md-cell")) return;
@@ -232,6 +279,7 @@ const doc: ShellDocument = {
   snapshot: () => ({ text: view.state.sliceDoc(), doc: view.state.doc }),
   saved: (next) => { savedDoc = next; },
   refreshImages: () => refreshImageResolver(view),
+  scrollToAnchor: (fragment) => scrollToAnchor(view, fragment),
   onChange: (callback) => { documentChanged = callback; },
 };
 
@@ -256,6 +304,7 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   modes,
   lineEndings,
   imageUrlAllowed,
+  headingSlugs: () => headingSlugs(view.state),
   // The app reads this from settings.json; off by default, as there.
   setRemoteImages: (on: boolean) => { setRemoteImages(view, on); },
   localImageCandidate,

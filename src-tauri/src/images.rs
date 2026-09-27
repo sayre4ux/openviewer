@@ -398,7 +398,7 @@ fn insert(
   Ok(InsertedImage { markdown: markdown_for(&document, &stored).ok_or("Couldn't link the image")? })
 }
 
-fn percent_decode(s: &str) -> String {
+pub fn percent_decode(s: &str) -> String {
   let bytes = s.as_bytes();
   let mut out = Vec::with_capacity(bytes.len());
   let mut i = 0;

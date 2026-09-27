@@ -10,6 +10,7 @@ use tauri::{webview::WebviewWindowBuilder, Emitter, Manager, Runtime};
 mod documents;
 mod export;
 mod images;
+mod links;
 mod menu;
 mod platform;
 mod settings;
@@ -58,14 +59,20 @@ fn open_requested<R: Runtime>(app: &tauri::AppHandle<R>, path: &Path) {
 
 #[tauri::command]
 fn create_document_window<R: Runtime>(app: tauri::AppHandle<R>, path: Option<String>) -> Result<(), String> {
-  let url = match path {
+  match path {
     Some(path) => {
       let target = app.state::<AuthorizedDocuments>().require(Path::new(&path), false)?;
-      format!("index.html?path={}", encode_query(&target.to_string_lossy()))
+      open_document_window(&app, &target, None)
     }
-    None => "index.html".to_string(),
-  };
-  open_window(&app, url)
+    None => open_window(&app, "index.html".to_string()),
+  }
+}
+
+// A window for an authorized document; `anchor` is a heading to scroll to once it loads.
+pub(crate) fn open_document_window<R: Runtime>(app: &tauri::AppHandle<R>, path: &Path, anchor: Option<&str>) -> Result<(), String> {
+  let mut url = format!("index.html?path={}", encode_query(&path.to_string_lossy()));
+  if let Some(anchor) = anchor { url.push_str(&format!("&anchor={}", encode_query(anchor))); }
+  open_window(app, url)
 }
 
 const WINDOW_SIZE: (f64, f64) = (1100.0, 760.0);
@@ -269,6 +276,7 @@ pub fn run() {
     })
     .invoke_handler(tauri::generate_handler![
       documents::read_document,
+      links::open_linked_document,
       documents::write_document,
       documents::open_dialog,
       documents::save_dialog,
@@ -380,7 +388,7 @@ mod tests {
     assert!(!docs.contains(&serde_json::json!("core:event:allow-emit")));
     assert!(!prefs.contains(&serde_json::json!("core:event:allow-emit")));
     assert!(!prefs.contains(&serde_json::json!("core:window:allow-destroy")));
-    for permission in ["allow-read-document", "allow-write-document", "allow-create-document-window", "allow-open-dialog", "allow-save-dialog", "allow-resolve-image-path"] {
+    for permission in ["allow-read-document", "allow-write-document", "allow-create-document-window", "allow-open-dialog", "allow-save-dialog", "allow-resolve-image-path", "allow-open-linked-document"] {
       assert!(docs.contains(&serde_json::json!(permission)));
       assert!(!prefs.contains(&serde_json::json!(permission)));
     }

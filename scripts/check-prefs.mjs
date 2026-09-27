@@ -51,7 +51,8 @@ await row("Bold").locator(".prefs-reset").click(); await settle();
 check("reset one", !("bold" in (await overrides())));
 
 await page.fill("#search", "head"); await settle();
-check("search filters", (await page.locator(".prefs-row").count()) === 6, String(await page.locator(".prefs-row").count()));
+// Heading 1–6, plus Collapse All Headings and Expand All Headings.
+check("search filters", (await page.locator(".prefs-row").count()) === 8, String(await page.locator(".prefs-row").count()));
 await page.fill("#search", ""); await settle();
 
 await page.click("#reset-all"); await settle();

@@ -26,12 +26,13 @@ const MAX_TABLE_CELLS = 5000;
 const MAX_DOCUMENT_TABLE_CELLS = 20000;
 
 // Shortcuts that cells handle themselves, kept in step with the customizable shortcuts.
-let cellFormatKeys: Record<string, string> = { "Cmd+B": "**", "Cmd+I": "*", "Cmd+E": "`" };
+let cellFormatKeys: Record<string, string> = { "Cmd+B": "**", "Cmd+I": "*", "Cmd+Shift+X": "~~", "Cmd+E": "`" };
 let cellHistoryKeys: Record<string, "undo" | "redo"> = { "Cmd+Z": "undo", "Cmd+Shift+Z": "redo" };
 export function setCellKeys(keys: Record<string, string>) {
   cellFormatKeys = {};
   if (keys.bold) cellFormatKeys[keys.bold] = "**";
   if (keys.italic) cellFormatKeys[keys.italic] = "*";
+  if (keys.strikethrough) cellFormatKeys[keys.strikethrough] = "~~";
   if (keys.code) cellFormatKeys[keys.code] = "`";
   cellHistoryKeys = {};
   if (keys.undo) cellHistoryKeys[keys.undo] = "undo";

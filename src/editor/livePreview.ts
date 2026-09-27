@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState, Range } from "@codemirror/state";
+import { type EditorState, type Range, type SelectionRange, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -9,6 +9,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { scrollToAnchor } from "./anchors";
 import { CodeLanguageWidget } from "./codeLanguage";
 import { tables } from "./tables";
 
@@ -277,8 +278,44 @@ function isPrivateV6(host: string): boolean {
   return false;
 }
 
+// While the mouse button is down, syntax stays shown or hidden as it was when the press started, so
+// the text doesn't reflow under a drag. It settles once, on release.
+const setFrozenSelection = StateEffect.define<readonly SelectionRange[] | null>();
+const frozenSelection = StateField.define<readonly SelectionRange[] | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setFrozenSelection)) return e.value;
+    return value && tr.docChanged ? value.map((r) => r.map(tr.changes)) : value;
+  },
+});
+
+const freezeDuringDrag = EditorView.domEventHandlers({
+  mousedown(e, view) {
+    if (e.button !== 0 || view.state.field(frozenSelection)) return false;
+    view.dispatch({ effects: setFrozenSelection.of(view.state.selection.ranges) });
+    // Released on the window, so a drag that ends outside the editor still settles. A button released
+    // outside the app window sends no mouseup, so a move with no button held, a key press, or losing
+    // focus also end it.
+    const events: [string, (e: Event) => void][] = [
+      ["mouseup", () => release()],
+      ["pointerup", () => release()],
+      ["pointercancel", () => release()],
+      ["mousemove", (e) => { if (((e as MouseEvent).buttons & 1) === 0) release(); }],
+      ["keydown", () => release()],
+      ["blur", () => release()],
+    ];
+    const release = () => {
+      for (const [type, handler] of events) window.removeEventListener(type, handler, true);
+      if (view.state.field(frozenSelection, false)) view.dispatch({ effects: setFrozenSelection.of(null) });
+    };
+    for (const [type, handler] of events) window.addEventListener(type, handler, true);
+    return false;
+  },
+});
+
 function touches(state: EditorState, from: number, to: number) {
-  for (const r of state.selection.ranges) if (r.from <= to && r.to >= from) return true;
+  const ranges = state.field(frozenSelection, false) ?? state.selection.ranges;
+  for (const r of ranges) if (r.from <= to && r.to >= from) return true;
   return false;
 }
 
@@ -530,7 +567,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       this.decorations = buildDecorations(view);
     }
     update(u: ViewUpdate) {
-      if (u.docChanged || u.selectionSet || u.viewportChanged || syntaxTree(u.startState) !== syntaxTree(u.state)) {
+      const frozenChanged = u.startState.field(frozenSelection, false) !== u.state.field(frozenSelection, false);
+      if (u.docChanged || u.selectionSet || frozenChanged || u.viewportChanged || syntaxTree(u.startState) !== syntaxTree(u.state)) {
         this.decorations = buildDecorations(u.view);
       }
     }
@@ -551,15 +589,17 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 );
 
 const linkClick = EditorView.domEventHandlers({
-  mousedown(e) {
+  mousedown(e, view) {
     if (!(e.metaKey || e.ctrlKey)) return false;
     const el = (e.target as HTMLElement).closest("[data-href]");
     const href = el?.getAttribute("data-href");
     if (!href) return false;
     e.preventDefault();
-    window.dispatchEvent(new CustomEvent("openviewer:open-link", { detail: href }));
+    // A link to a heading in this document is followed here; anything else goes to the app shell.
+    if (href.startsWith("#")) scrollToAnchor(view, href);
+    else window.dispatchEvent(new CustomEvent("openviewer:open-link", { detail: href }));
     return true;
   },
 });
 
-export const livePreview = [livePreviewPlugin, linkClick, tables];
+export const livePreview = [frozenSelection, freezeDuringDrag, livePreviewPlugin, linkClick, tables];

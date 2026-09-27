@@ -11,9 +11,14 @@
   { "id": "undo", "label": "Undo", "menu": "Edit", "key": "Cmd+Z" },
   { "id": "redo", "label": "Redo", "menu": "Edit", "key": "Cmd+Shift+Z" },
   { "id": "insert-table", "label": "Insert Table", "menu": "Edit", "key": "Cmd+Alt+T", "separatorBefore": true, "afterClipboard": true },
+  { "id": "find", "label": "Find…", "menu": "Edit", "key": "Cmd+F", "separatorBefore": true },
+  { "id": "find-next", "label": "Find Next", "menu": "Edit", "key": "Cmd+G" },
+  { "id": "find-previous", "label": "Find Previous", "menu": "Edit", "key": "Cmd+Shift+G" },
+  { "id": "replace", "label": "Find and Replace…", "menu": "Edit", "key": "Cmd+Alt+F" },
 
   { "id": "bold", "label": "Bold", "menu": "Format", "key": "Cmd+B" },
   { "id": "italic", "label": "Italic", "menu": "Format", "key": "Cmd+I" },
+  { "id": "strikethrough", "label": "Strikethrough", "menu": "Format", "key": "Cmd+Shift+X" },
   { "id": "code", "label": "Inline Code", "menu": "Format", "key": "Cmd+E" },
 
   { "id": "heading-1", "label": "Heading 1", "menu": "Paragraph", "key": "Cmd+1" },
@@ -28,5 +33,12 @@
   { "id": "outline", "label": "Outline", "menu": "View", "key": "Cmd+Shift+L", "check": true, "separatorBefore": true },
   { "id": "focus-mode", "label": "Focus Mode", "menu": "View", "key": "F8", "check": true, "separatorBefore": true },
   { "id": "typewriter-mode", "label": "Typewriter Mode", "menu": "View", "key": "F9", "check": true },
-  { "id": "word-count", "label": "Word Count", "menu": "View", "key": "", "check": true, "separatorBefore": true }
+  { "id": "word-count", "label": "Word Count", "menu": "View", "key": "", "check": true, "separatorBefore": true },
+  { "id": "fold-section", "label": "Fold Section", "menu": "View", "key": "Cmd+Alt+[", "separatorBefore": true },
+  { "id": "unfold-section", "label": "Unfold Section", "menu": "View", "key": "Cmd+Alt+]" },
+  { "id": "fold-all", "label": "Collapse All Headings", "menu": "View", "key": "Cmd+Alt+Left" },
+  { "id": "unfold-all", "label": "Expand All Headings", "menu": "View", "key": "Cmd+Alt+Right" },
+  { "id": "zoom-in", "label": "Zoom In", "menu": "View", "key": "Cmd+=", "separatorBefore": true },
+  { "id": "zoom-out", "label": "Zoom Out", "menu": "View", "key": "Cmd+-" },
+  { "id": "actual-size", "label": "Actual Size", "menu": "View", "key": "Cmd+Shift+0" }
 ]

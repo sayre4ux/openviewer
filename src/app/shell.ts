@@ -16,6 +16,8 @@ export interface ShellDocument {
   snapshot(): { text: string; doc: Text };
   saved(doc: Text): void;
   refreshImages(): void;
+  // Scroll to a heading by its GitHub-style id; false when there is none.
+  scrollToAnchor(fragment: string): boolean;
   // Insert image links at a document position (or the selection) as one undoable edit.
   insertImages(markdown: string, at?: number | null): void;
   // The document position under a point in window coordinates (CSS pixels), if any.
@@ -315,7 +317,12 @@ export async function startShell(
   };
 
   const startupPath = new URLSearchParams(location.search).get("path");
-  if (startupPath) await openIntoCurrent(startupPath);
+  if (startupPath) {
+    await openIntoCurrent(startupPath);
+    // Opened from a link like `other.md#setup`.
+    const anchor = new URLSearchParams(location.search).get("anchor");
+    if (anchor) doc.scrollToAnchor(anchor);
+  }
   // Menu and open-path events are targeted at this window only (Rust uses emit_to).
   await win.listen<string>("menu", async ({ payload: id }) => {
     switch (id) {
@@ -382,13 +389,22 @@ export async function startShell(
   window.addEventListener("openviewer:open-link", (event) => {
     const href = (event as CustomEvent<string>).detail;
     // new URL lowercases the scheme; the opener's URL scope is case-sensitive (HTTP://x wouldn't open).
-    let url: URL;
+    let url: URL | null = null;
     try {
       url = new URL(href);
     } catch {
+      // Not an absolute URL: a path, handled below.
+    }
+    if (url) {
+      if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:") void openUrl(url.href);
       return;
     }
-    if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:") void openUrl(url.href);
+    // Another document next to this one: Rust checks it is Markdown or text inside this document's
+    // folder or repository. Other local files are never opened from a link.
+    const [target, anchor = ""] = href.split("#", 2);
+    if (!path || !/\.(md|markdown|mdown|txt)>?$/i.test(target)) return;
+    call("open_linked_document", { documentPath: path, target, anchor: anchor || null })
+      .catch((error) => message(String(error), { title: "Couldn’t open link", kind: "warning" }));
   });
   for (const pending of await call<string[]>("frontend_ready")) await openPath(pending);
   // Opened by File → Open while no document window existed.

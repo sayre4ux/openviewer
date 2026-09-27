@@ -51,6 +51,17 @@ impl AuthorizedDocuments {
     Ok(canonical)
   }
 
+  // Authorize a path that has already been checked, only if it still resolves to itself: a symlink
+  // swapped in after the check makes it resolve elsewhere, and then nothing is authorized.
+  pub fn authorize_exact(&self, checked: &Path) -> Result<PathBuf, String> {
+    let canonical = canonical_document(checked, false)?;
+    if canonical != checked {
+      return Err(format!("{} changed while it was being opened.", path_name(checked)));
+    }
+    self.0.lock().unwrap().insert(canonical.clone());
+    Ok(canonical)
+  }
+
   pub fn require(&self, path: &Path, allow_new: bool) -> Result<PathBuf, String> {
     let canonical = canonical_document(path, allow_new)?;
     if !self.0.lock().unwrap().contains(&canonical) {

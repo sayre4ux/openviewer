@@ -558,3 +558,127 @@ body {
   font-family: var(--mono);
   font-size: 0.875rem;
 }
+
+/* ---------- Find and replace (⌘F, ⌥⌘F): a hairline bar above the text, like a newspaper rule ---------- */
+
+#editor .cm-panels {
+  background: var(--paper);
+  color: var(--ink);
+  z-index: 3;
+}
+#editor .cm-panels-top {
+  border-bottom: 1px solid var(--rule);
+}
+#editor .ov-find {
+  max-width: calc(var(--column) + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: 8px var(--gutter);
+  box-sizing: border-box;
+  /* The column width is in em: at the editor's size here, so the bar lines up with the text. */
+  font-size: 1rem;
+}
+#editor .ov-find-row {
+  font: 13px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#editor .ov-find-row + .ov-find-row {
+  margin-top: 6px;
+}
+#editor .ov-find-row[hidden] {
+  display: none;
+}
+#editor .ov-find-field {
+  flex: 1;
+  min-width: 8em;
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: #fbfaf7;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+#editor .ov-find-field:focus {
+  border-color: var(--link);
+}
+#editor .ov-find-field.is-invalid {
+  border-color: #b3261e;
+}
+#editor .ov-find-count {
+  min-width: 6.5em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#editor .ov-find-button {
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+#editor .ov-find-button:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+#editor .ov-find-toggle[aria-pressed="true"] {
+  border-color: var(--rule);
+  background: var(--code-bg);
+  color: var(--ink);
+}
+#editor .ov-find.is-replacing .ov-find-more {
+  color: var(--ink);
+}
+#editor .cm-searchMatch {
+  background: rgba(255, 213, 79, 0.45);
+  border-radius: 2px;
+}
+#editor .cm-searchMatch-selected {
+  background: rgba(255, 170, 0, 0.75);
+}
+
+/* ---------- Heading folding: a chevron in the left margin on hover; a folded section is "…" ---------- */
+
+#editor .cm-md-fold {
+  position: absolute;
+  width: 1em;
+  margin-left: -1.25em;
+  color: var(--meta);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  /* The heading's own size and line height, so the glyph centers on the text; then drawn smaller. */
+  line-height: inherit;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 120ms, transform 120ms;
+  user-select: none;
+}
+#editor .cm-md-fold::before {
+  content: "▾";
+}
+#editor .cm-line:hover .cm-md-fold,
+#editor .cm-md-fold:hover {
+  opacity: 0.8;
+}
+#editor .cm-md-fold.is-folded {
+  opacity: 0.8;
+  transform: scale(0.9) rotate(-90deg);
+}
+#editor .cm-md-folded {
+  display: inline-block;
+  margin-left: 0.4em;
+  padding: 0 0.45em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-family: var(--serif);
+  font-size: 0.8em;
+  line-height: 1.4;
+  vertical-align: middle;
+  cursor: pointer;
+}

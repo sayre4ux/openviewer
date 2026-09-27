@@ -31,6 +31,7 @@
     "allow-export-dialog",
     "allow-export-html",
     "allow-export-pdf",
-    "allow-export-image"
+    "allow-export-image",
+    "allow-open-linked-document"
   ]
 }
