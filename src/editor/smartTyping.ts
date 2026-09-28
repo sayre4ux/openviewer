@@ -64,8 +64,14 @@ export function insideLiteral(state: EditorState, pos: number): boolean {
       if (n.name === "FencedCode") return !(n.lastChild?.name === "CodeMark" && n.lastChild.from > n.from);
       // Indented code: only more text on its last line.
       if (n.name === "CodeBlock") return end === pos;
-      // HTML: the same line, or the one right after it (no blank line has ended the block yet).
-      if (n.name === "HTMLBlock") return state.doc.lineAt(pos).number - state.doc.lineAt(end).number <= 1;
+      // HTML: the same line; or the next one for blocks that only a blank line ends (CommonMark types
+      // 6 and 7, `<div>`). `<pre>`, `<script>`, `<style>`, `<textarea>`, comments, and the like end at
+      // their closing tag, so the line after them is outside.
+      if (n.name === "HTMLBlock") {
+        const lines = state.doc.lineAt(pos).number - state.doc.lineAt(end).number;
+        const closesItself = /^ {0,3}<(?:(?:pre|script|style|textarea)\b|!--|\?|![A-Za-z]|!\[CDATA\[)/i.test(state.doc.lineAt(n.from).text);
+        return lines === 0 || (lines === 1 && !closesItself);
+      }
     }
   }
   return false;

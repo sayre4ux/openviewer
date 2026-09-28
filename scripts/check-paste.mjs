@@ -2,6 +2,9 @@
 // Usage: node scripts/check-paste.mjs [outDir] [chromium|webkit]
 import { chromium, webkit } from "playwright";
 import { mkdirSync } from "node:fs";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { ensureSyntaxTree } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
 
 const out = process.argv[2] ?? "shots";
 const engine = process.argv[3] ?? "chromium";
@@ -127,16 +130,17 @@ try {
   check("a pasted table is kept apart from the lines around it",
     ["blankLine", "midLine", "alone", "end", "quote", "list", "quoteMid"].every((k) => tablePaste[k][0] === tablePaste[k][1]) && tablePaste.table.startsWith("| a | b |"),
     JSON.stringify(tablePaste));
-  // And the parser agrees: the pasted table is a table inside the quote and inside the list item.
-  const containers = await page.evaluate(() => {
-    const view = window.__ov.view;
-    const probe = (doc) => {
-      window.__ov.load(doc);
-      return [...document.querySelectorAll(".cm-md-table-wrap")].map((w) => !!w.closest(".cm-line, .cm-content") && w.querySelectorAll(".cm-md-cell").length);
-    };
-    return { quote: probe("> Intro\n> \n> | a | b |\n> | --- | --- |\n> | 1 | 2 |\n>\n> After\n"), list: probe("- item\n\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |\n\nafter\n") };
-  });
-  check("a table pasted in a quote or list item still renders as a table", containers.quote[0] === 4 && containers.list[0] === 4, JSON.stringify(containers));
+  // And the parser agrees: in the pasted results, the Table sits inside the Blockquote and the ListItem.
+  const containerOf = (text) => {
+    const state = EditorState.create({ doc: text, extensions: [markdown({ base: markdownLanguage })] });
+    let parent = null;
+    ensureSyntaxTree(state, text.length, 5000).iterate({ enter: (n) => {
+      if (n.name === "Table" && !parent) parent = n.node.parent?.name ?? null;
+    } });
+    return parent;
+  };
+  const containers = { quote: containerOf(tablePaste.quote[0]), list: containerOf(tablePaste.list[0]), top: containerOf(tablePaste.blankLine[0]) };
+  check("a table pasted in a quote or list item is a table inside it", containers.quote === "Blockquote" && containers.list === "ListItem" && containers.top === "Document", JSON.stringify(containers));
 
   // Plain multi-line paste into files with other line breaks: the text gets the file's breaks and the
   // caret lands after it. In a CR file, CRLF text used to throw (the rewrite shortened the insert).
@@ -205,13 +209,15 @@ try {
       htmlEnd: paste("<div>\nx\n|"),
       afterClosedFence: paste("```\nx\n```\n\n|"),
       nextTo: paste("see `ab`|\n", "<b>bold</b> text", "bold text"),
+      // `<pre>` ends at its closing tag, so the next line is outside the HTML block.
+      afterPre: paste("<pre>x</pre>\n|", "<b>bold</b> text", "bold text"),
     };
   });
   const lp = literalPaste;
   check("rich paste inside code, math, or HTML is plain text",
     lp.fence === "```js\nfoo_bar(*args)\n```\n" && lp.display === "$$\nxfoo_bar(*args)\n$$\n" &&
     lp.inlineCode === "see `afoo_bar(*args)b` here\n" && lp.inlineMath === "see $afoo_bar(*args)b$ here\n" &&
-    lp.html === "<div>\nxfoo_bar(*args)\n</div>\n" && lp.nextTo === "see `ab`**bold** text\n" &&
+    lp.html === "<div>\nxfoo_bar(*args)\n</div>\n" && lp.nextTo === "see `ab`**bold** text\n" && lp.afterPre === "<pre>x</pre>\n**bold** text" &&
     lp.openFence === "```js\nfoo_bar(*args)" && lp.openFenceAfterCode === "```js\ncode\n\nfoo_bar(*args)" &&
     lp.indented === "text\n\n    codefoo_bar(*args)\n\nafter\n" && lp.htmlEnd === "<div>\nx\nfoo_bar(*args)" &&
     lp.afterClosedFence.startsWith("```\nx\n```\n\n```"),
