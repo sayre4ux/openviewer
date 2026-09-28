@@ -1,0 +1,17 @@
+[
+  ["zh-HK", "zh-Hant"],
+  ["zh-TW", "zh-Hant"],
+  ["zh-MO", "zh-Hant"],
+  ["zh-Hant-HK", "zh-Hant"],
+  ["zh_TW", "zh-Hant"],
+  ["zh-CN", "zh-Hans"],
+  ["zh-SG", "zh-Hans"],
+  ["zh-Hans-SG", "zh-Hans"],
+  ["zh", "zh-Hans"],
+  ["ja-JP", "ja"],
+  ["ja", "ja"],
+  ["en-GB", "en"],
+  ["EN-us", "en"],
+  ["fr-FR", null],
+  ["de", null]
+]

@@ -281,3 +281,6 @@ kbd {
   color: var(--muted);
   font: 13px var(--sans);
 }
+.prefs-attention {
+  color: var(--warn);
+}

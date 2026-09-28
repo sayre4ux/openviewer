@@ -47,17 +47,39 @@ pub fn t(key: &str) -> String {
     .cloned().unwrap_or_else(|| key.to_string())
 }
 
+// One pass over the template: a value is never searched again, so a file named "{error}" stays as is.
 pub fn t_with(key: &str, vars: &[(&str, &str)]) -> String {
-  let mut text = t(key);
-  for (name, value) in vars {
-    text = text.replace(&format!("{{{name}}}"), value);
+  let template = t(key);
+  let mut text = String::with_capacity(template.len());
+  let mut rest = template.as_str();
+  while let Some(open) = rest.find('{') {
+    text.push_str(&rest[..open]);
+    let after = &rest[open + 1..];
+    match after.find('}').and_then(|close| vars.iter().find(|(name, _)| *name == &after[..close]).map(|(_, value)| (close, value))) {
+      Some((close, value)) => {
+        text.push_str(value);
+        rest = &after[close + 1..];
+      }
+      None => {
+        text.push('{');
+        rest = after;
+      }
+    }
   }
+  text.push_str(rest);
   text
 }
 
 #[cfg(test)]
 mod tests {
   use std::collections::{BTreeMap, BTreeSet};
+
+  #[test]
+  fn a_value_that_looks_like_a_placeholder_is_not_substituted_again() {
+    let text = super::t_with("keybindings.cannotUse", &[("name", "{error}"), ("error", "denied")]);
+    assert!(text.contains("{error}") && text.contains("denied"), "{text}");
+    assert_eq!(super::t_with("keybindings.cannotUse", &[("name", "a"), ("error", "b")]), super::t("keybindings.cannotUse").replace("{name}", "a").replace("{error}", "b"));
+  }
 
   const INCOMPLETE_TRANSLATION_ALLOWLIST: &[(&str, &str)] = &[];
 

@@ -97,6 +97,126 @@ try {
     richPaste.pasted === richPaste.expected && richPaste.prevented && richPaste.caretText === "paste" && richPaste.caretAtEnd && richPaste.undo === "a\r\nb\r\n",
     JSON.stringify(richPaste));
 
+  // A pasted table gets blank lines around it, as ⌥⌘T's does, so neighbouring text isn't read as rows.
+  const tablePaste = await page.evaluate(() => {
+    const view = window.__ov.view;
+    const html = "<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>";
+    const table = window.__ov.htmlToMarkdown(html);
+    const paste = (text, anchor) => {
+      window.__ov.load(text);
+      view.dispatch({ selection: { anchor } });
+      const transfer = new DataTransfer();
+      transfer.setData("text/html", html);
+      transfer.setData("text/plain", "a b 1 2");
+      view.contentDOM.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+      return view.state.sliceDoc();
+    };
+    const crlf = table.replace(/\n/g, "\r\n");
+    return {
+      table,
+      blankLine: [paste("Intro\n\nSee below.\n", 6), `Intro\n\n${table}\n\nSee below.\n`],
+      midLine: [paste("foobar\r\n", 3), `foo\r\n\r\n${crlf}\r\n\r\nbar\r\n`],
+      alone: [paste("\n\nafter\n", 0), `${table}\n\nafter\n`],
+      end: [paste("text\n\n", 6), `text\n\n${table}`],
+      // Inside a quote or a list item every new line keeps the container's prefix.
+      quote: [paste("> Intro\n> \n> After\n", 10), `> Intro\n> \n${table.replace(/^/gm, "> ")}\n>\n> After\n`],
+      list: [paste("- item\n\nafter\n", 6), `- item\n\n${table.replace(/^/gm, "  ")}\n\nafter\n`],
+      quoteMid: [paste("> foobar\n", 5), `> foo\n>\n${table.replace(/^/gm, "> ")}\n>\n> bar\n`],
+    };
+  });
+  check("a pasted table is kept apart from the lines around it",
+    ["blankLine", "midLine", "alone", "end", "quote", "list", "quoteMid"].every((k) => tablePaste[k][0] === tablePaste[k][1]) && tablePaste.table.startsWith("| a | b |"),
+    JSON.stringify(tablePaste));
+  // And the parser agrees: the pasted table is a table inside the quote and inside the list item.
+  const containers = await page.evaluate(() => {
+    const view = window.__ov.view;
+    const probe = (doc) => {
+      window.__ov.load(doc);
+      return [...document.querySelectorAll(".cm-md-table-wrap")].map((w) => !!w.closest(".cm-line, .cm-content") && w.querySelectorAll(".cm-md-cell").length);
+    };
+    return { quote: probe("> Intro\n> \n> | a | b |\n> | --- | --- |\n> | 1 | 2 |\n>\n> After\n"), list: probe("- item\n\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |\n\nafter\n") };
+  });
+  check("a table pasted in a quote or list item still renders as a table", containers.quote[0] === 4 && containers.list[0] === 4, JSON.stringify(containers));
+
+  // Plain multi-line paste into files with other line breaks: the text gets the file's breaks and the
+  // caret lands after it. In a CR file, CRLF text used to throw (the rewrite shortened the insert).
+  const lineBreakPaste = await page.evaluate(() => {
+    const view = window.__ov.view;
+    const paste = (doc, at, text) => {
+      window.__ov.load(doc);
+      view.dispatch({ selection: { anchor: at } });
+      const transfer = new DataTransfer();
+      transfer.setData("text/plain", text);
+      let error = null;
+      try {
+        view.contentDOM.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+      } catch (e) { error = String(e); }
+      const head = view.state.selection.main.head;
+      return { doc: view.state.sliceDoc(), before: view.state.sliceDoc(0, head), error };
+    };
+    // Transactions that don't leave the caret at the end of the insert, as other commands send them.
+    const direct = (doc, spec) => {
+      window.__ov.load(doc);
+      view.dispatch(spec);
+      const { anchor, head } = view.state.selection.main;
+      return { doc: view.state.sliceDoc(), anchor, head };
+    };
+    return {
+      crlf: paste("abc\r\ndef", 3, "one\ntwo\nthree"), cr: paste("ab\rcd", 5, "x\r\ny\r\nz"), crMid: paste("ab\rcd", 1, "x\r\ny"),
+      caretBefore: direct("ab\rcd", { changes: { from: 2, insert: "x\r\ny" }, selection: { anchor: 2 } }),
+      rangeOver: direct("ab\rcd", { changes: { from: 2, insert: "x\r\ny" }, selection: { anchor: 2, head: 6 } }),
+      twoInserts: direct("ab\rcd", { changes: [{ from: 0, insert: "p\r\nq" }, { from: 5, insert: "r\r\ns" }], selection: { anchor: 10 } }),
+    };
+  });
+  const lb = lineBreakPaste;
+  check("a multi-line plain paste takes the file's line breaks and leaves the caret after it",
+    lb.crlf.doc === "abcone\r\ntwo\r\nthree\r\ndef" && lb.crlf.before === "abcone\r\ntwo\r\nthree" &&
+    lb.cr.doc === "ab\rcdx\ry\rz" && lb.cr.before === "ab\rcdx\ry\rz" && !lb.cr.error &&
+    lb.crMid.doc === "ax\ryb\rcd" && lb.crMid.before === "ax\ry" &&
+    // The caret stays before the insert, a range still covers it, and a caret inside the second of two
+    // inserts stays inside it (after "r", before its line break).
+    lb.caretBefore.doc === "abx\ry\rcd" && lb.caretBefore.head === 2 &&
+    lb.rangeOver.anchor === 2 && lb.rangeOver.head === 5 &&
+    lb.twoInserts.doc === "p\rqab\rcdr\rs" && lb.twoInserts.head === 9,
+    JSON.stringify(lineBreakPaste));
+
+  // Inside code, math, or HTML a rich paste is plain text; right next to them it is still rich.
+  const literalPaste = await page.evaluate(() => {
+    const view = window.__ov.view;
+    const paste = (doc, html = "<pre><code>foo_bar(*args)</code></pre>", text = "foo_bar(*args)") => {
+      window.__ov.load(doc.replace("|", ""));
+      view.dispatch({ selection: { anchor: doc.indexOf("|") } });
+      const transfer = new DataTransfer();
+      transfer.setData("text/html", html);
+      transfer.setData("text/plain", text);
+      view.contentDOM.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+      return view.state.sliceDoc();
+    };
+    return {
+      fence: paste("```js\n|\n```\n"),
+      display: paste("$$\nx|\n$$\n"),
+      inlineCode: paste("see `a|b` here\n"),
+      inlineMath: paste("see $a|b$ here\n"),
+      html: paste("<div>\nx|\n</div>\n"),
+      // Blocks with no closing mark end at their last character; the caret there is still inside.
+      openFence: paste("```js\n|"),
+      openFenceAfterCode: paste("```js\ncode\n\n|"),
+      indented: paste("text\n\n    code|\n\nafter\n"),
+      htmlEnd: paste("<div>\nx\n|"),
+      afterClosedFence: paste("```\nx\n```\n\n|"),
+      nextTo: paste("see `ab`|\n", "<b>bold</b> text", "bold text"),
+    };
+  });
+  const lp = literalPaste;
+  check("rich paste inside code, math, or HTML is plain text",
+    lp.fence === "```js\nfoo_bar(*args)\n```\n" && lp.display === "$$\nxfoo_bar(*args)\n$$\n" &&
+    lp.inlineCode === "see `afoo_bar(*args)b` here\n" && lp.inlineMath === "see $afoo_bar(*args)b$ here\n" &&
+    lp.html === "<div>\nxfoo_bar(*args)\n</div>\n" && lp.nextTo === "see `ab`**bold** text\n" &&
+    lp.openFence === "```js\nfoo_bar(*args)" && lp.openFenceAfterCode === "```js\ncode\n\nfoo_bar(*args)" &&
+    lp.indented === "text\n\n    codefoo_bar(*args)\n\nafter\n" && lp.htmlEnd === "<div>\nx\nfoo_bar(*args)" &&
+    lp.afterClosedFence.startsWith("```\nx\n```\n\n```"),
+    JSON.stringify(literalPaste));
+
   const plainPaste = await page.evaluate(() => {
     window.__ov.load("x\r\ny\r\n");
     const view = window.__ov.view;

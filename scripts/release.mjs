@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { arch as hostArch } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -39,6 +40,8 @@ function commandOutput(command, args, options = {}) {
     encoding: "utf8",
     stdio: options.inherit ? "inherit" : "pipe",
     env: process.env,
+    // `strings` on the release binary is already over half of Node's 1 MiB default.
+    maxBuffer: 256 * 1024 * 1024,
   });
   if (result.error) fail(`Couldn't run ${command}: ${result.error.message}`);
   if (result.status !== 0) {
@@ -110,7 +113,7 @@ function setVersion(version) {
   else console.log(`All version files already contain ${version}.`);
 }
 
-function parseArgs(args) {
+export function parseArgs(args) {
   const options = { version: null, universal: false, publish: false };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -128,23 +131,88 @@ function parseArgs(args) {
   if (options.version && (options.universal || options.publish)) {
     fail("--version only updates version files; run the release again after committing them");
   }
+  // There is one latest.json for every Mac. Publishing a single-architecture one would replace the
+  // feed with a file the other kind of Mac finds nothing in, so it would stop updating. (Keeping an
+  // older release's entry for it wouldn't work either: the feed has one version for all platforms.)
+  if (options.publish && !options.universal) {
+    fail("--publish needs --universal: the update feed serves Apple silicon and Intel from one latest.json.");
+  }
   return options;
 }
 
-function realUpdaterPublicKey(config) {
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function base64Text(value) {
+  const compact = value.replace(/\s+/g, "");
+  if (!BASE64.test(compact)) return null;
+  return Buffer.from(compact, "base64").toString("utf8");
+}
+
+// The minisign line that isn't a comment, decoded: two algorithm bytes, an 8-byte key id, the rest.
+function minisignLine(text, length) {
+  const line = text.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.includes(":"));
+  const bytes = line && BASE64.test(line) ? Buffer.from(line, "base64") : null;
+  return bytes && bytes.length === length ? bytes : null;
+}
+
+// The updater's `pubkey` is the whole .pub file that `tauri signer generate` writes: the base64 of a
+// minisign public key ("untrusted comment: …" and an "RW…" line). Tauri decodes it before use, so a
+// pasted raw "RW…" line would pass a looser check here and then fail every update check.
+export function updaterPublicKey(config) {
   const key = config.plugins?.updater?.pubkey?.trim();
-  if (!key || key === "REPLACE_WITH_PUBLIC_KEY" || key.includes("REPLACE_WITH_PUBLIC_KEY")) {
+  if (!key || key.includes("REPLACE_WITH_PUBLIC_KEY")) {
     fail([
       "The updater public key is still a placeholder.",
       "Generate a key pair with: npx tauri signer generate -w ~/.tauri/openviewer.key",
-      "Then paste the generated public key into src-tauri/tauri.release.conf.json.",
+      "Then paste the contents of ~/.tauri/openviewer.key.pub into src-tauri/tauri.release.conf.json.",
     ].join("\n"));
   }
-  const keyLine = key.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith("RWQ"));
-  if (!keyLine || !/^RWQ[A-Za-z0-9+/]{50,}={0,2}$/.test(keyLine)) {
-    fail("The updater pubkey doesn't look like a Tauri minisign public key. Paste the public key produced by tauri signer generate.");
+  const text = base64Text(key);
+  const bytes = text && minisignLine(text, 42);
+  if (!bytes || bytes.subarray(0, 2).toString("latin1") !== "Ed") {
+    fail("The updater pubkey isn't a Tauri public key. Paste the whole contents of the .pub file that tauri signer generate wrote (one base64 line).");
   }
-  return key;
+  return { keyId: bytes.subarray(2, 10), key: bytes.subarray(10) };
+}
+
+// Checks an updater signature (.sig) the way the app will before it installs anything: the key id,
+// the signature over the archive, the signature over the trusted comment, and the version it names
+// (required: the app is built with requireSignedVersion, so a feed can't pair a new version number
+// with an older, genuinely signed archive). A mismatch means the private key used for the build isn't the one whose
+// public key ships in the app, and every installed copy would reject the update.
+export function verifyUpdaterSignature(data, signatureFile, publicKey, version) {
+  const text = base64Text(signatureFile.trim());
+  if (!text) fail("The updater signature isn't base64.");
+  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  const sig = minisignLine(text, 74);
+  const trustedAt = lines.findIndex((l) => l.startsWith("trusted comment: "));
+  const global = trustedAt >= 0 && BASE64.test(lines[trustedAt + 1] ?? "") ? Buffer.from(lines[trustedAt + 1], "base64") : null;
+  if (!sig || !global || global.length !== 64) fail("The updater signature isn't a minisign signature.");
+  const algorithm = sig.subarray(0, 2).toString("latin1");
+  if (algorithm !== "ED" && algorithm !== "Ed") fail(`Unknown signature algorithm: ${algorithm}`);
+  const keyId = sig.subarray(2, 10);
+  if (!keyId.equals(publicKey.keyId)) {
+    fail(`The update was signed with a different key (key id ${hexId(keyId)}) than the pubkey in tauri.release.conf.json (${hexId(publicKey.keyId)}). Set TAURI_SIGNING_PRIVATE_KEY to the matching private key.`);
+  }
+  const spki = createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), publicKey.key]), format: "der", type: "spki" });
+  // "ED" signs the file's BLAKE2b-512 hash (what Tauri writes); "Ed" signs the bytes themselves.
+  const message = algorithm === "ED" ? createHash("blake2b512").update(data).digest() : data;
+  const signature = sig.subarray(10);
+  if (!verify(null, message, spki, signature)) fail("The updater signature doesn't match the archive.");
+  const trusted = lines[trustedAt].slice("trusted comment: ".length);
+  if (!verify(null, Buffer.concat([signature, Buffer.from(trusted, "utf8")]), spki, global)) {
+    fail("The updater signature's trusted comment doesn't verify.");
+  }
+  const signed = trusted.split("\t").find((field) => field.startsWith("version:"))?.slice("version:".length);
+  if (signed === undefined) fail("The updater signature doesn't name a version, and the app requires one.");
+  if (signed.replace(/^v/, "") !== version) {
+    fail(`The update archive was signed for version ${signed}, not ${version}.`);
+  }
+}
+
+// minisign prints key ids as the 8 bytes in reverse, as hex.
+function hexId(bytes) {
+  return Buffer.from(bytes).reverse().toString("hex").toUpperCase();
 }
 
 function verifySigningEnvironment() {
@@ -204,9 +272,13 @@ function ensureAvailableOutputDirectory(path) {
   }
 }
 
-function publishPrerequisites() {
+// The release tag is made on GitHub at `commit`, the one being built, so it has to be pushed first.
+function publishPrerequisites(commit) {
   commandOutput("gh", ["auth", "status"], { inherit: true });
   commandOutput("gh", ["repo", "view", repo, "--json", "nameWithOwner"], { inherit: true });
+  if (spawnSync("gh", ["api", `repos/${repo}/commits/${commit}`, "--silent"], { stdio: "ignore" }).status !== 0) {
+    fail(`Commit ${commit} isn't on GitHub yet. Push it, then publish: the release tag is made at the commit that was built.`);
+  }
 }
 
 function assertSemverVersion(version) {
@@ -244,7 +316,7 @@ async function release(options) {
   assertSemverVersion(version);
 
   const releaseConfig = JSON.parse(readFileSync(releaseConfigPath, "utf8"));
-  realUpdaterPublicKey(releaseConfig);
+  const publicKey = updaterPublicKey(releaseConfig);
   verifySigningEnvironment();
   const { target, arch } = targetInfo(options.universal);
   const releaseDir = join(root, "release", version);
@@ -262,7 +334,8 @@ async function release(options) {
   if (!notes) fail(`Release notes are empty: ${notesPath}`);
   const savedNotesPath = join(releaseDir, "release-notes.md");
 
-  if (options.publish) publishPrerequisites();
+  const commit = commandOutput("git", ["rev-parse", "HEAD"]).trim();
+  if (options.publish) publishPrerequisites(commit);
 
   console.log(`Building ${version} for ${arch} (${target})…`);
   const buildArgs = [
@@ -291,6 +364,7 @@ async function release(options) {
   commandOutput("ditto", ["-c", "-k", "--keepParent", appPath, zipPath], { inherit: true });
   copyFileSync(generatedArchive, archivePath);
   copyFileSync(generatedSignature, signaturePath);
+  verifyUpdaterSignature(readFileSync(archivePath), readFileSync(signaturePath, "utf8"), publicKey, version);
 
   const assetUrl = `https://github.com/${repo}/releases/download/v${version}/OpenViewer.app.tar.gz`;
   const latest = buildLatestJson({
@@ -302,12 +376,13 @@ async function release(options) {
     arch,
   });
   writeFileSync(latestPath, `${JSON.stringify(latest, null, 2)}\n`);
-  console.log(`Verified app signature and updater files. Binary has no /Users/ path.`);
+  console.log(`Verified the app's code signature, and the update signature against the app's public key. Binary has no /Users/ path.`);
   console.log(`Release files are in ${releaseDir}`);
 
   const assets = [zipPath, archivePath, signaturePath, latestPath];
   const publishArgs = [
     "release", "create", `v${version}`, ...assets,
+    "--target", commit,
     "--title", `OpenViewer ${version}`,
     "--notes-file", savedNotesPath,
   ];

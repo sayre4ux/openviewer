@@ -1,8 +1,8 @@
-import { history, defaultKeymap, indentWithTab, undo, redo } from "@codemirror/commands";
+import { history, defaultKeymap, indentWithTab, isolateHistory, undo, redo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { Compartment, type Extension, type Text } from "@codemirror/state";
+import { Compartment, EditorState, type Extension, type Text } from "@codemirror/state";
 import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { lineEndings, makeState, replaceDocument } from "./app/document";
 import { createOutline } from "./app/outline";
@@ -17,11 +17,11 @@ import { findCommands, findExtension } from "./editor/find";
 import { foldCommands, headingFolding } from "./editor/folding";
 import { htmlToMarkdown } from "./editor/htmlToMarkdown";
 import { formatCommands, typoraKeymap } from "./editor/keymap";
-import { smartTyping, smartTypingKeymap } from "./editor/smartTyping";
+import { insideLiteral, smartTyping, smartTypingKeymap } from "./editor/smartTyping";
 import { focusMode } from "./editor/focusMode";
 import { imageUrlAllowed, livePreview, refreshImageResolver, setImageResolver, setRemoteImages } from "./editor/livePreview";
 import { mathSyntax } from "./editor/math";
-import { formatInCell, insertTable, setCellKeys, tableRenderStats } from "./editor/tables";
+import { formatInCell, insertTable, pastedMarkdown, setCellKeys, tableRenderStats } from "./editor/tables";
 import { typewriter } from "./editor/typewriter";
 import { checkReply, diagramHash, diagramState, renderDiagram, resetDiagrams, sanitizeDiagram, setDiagramsEnabled } from "./render/diagram";
 import { katexOutput, loadMath, mathStats, renderMath } from "./render/math";
@@ -80,8 +80,14 @@ const wordCount = createWordCount(statusEl, () => (encoding === "UTF-8" ? "" : e
 const native = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 // Test hook (browser build): the performance harness times keystrokes up to the editor's update.
 const updateProbes: ((u: ViewUpdate) => void)[] = [];
+// Set while an update waits to relaunch the app (see shell.ts); a filter rather than readOnly, which
+// programmatic edits (table cells, Replace, dropped images) would bypass.
+let editsLocked = false;
+const editLock = EditorState.transactionFilter.of((tr) => (editsLocked && tr.docChanged ? [] : tr));
+
 function extensionsForDocument(): Extension[] {
   return [
+    editLock,
     history(),
     EditorView.lineWrapping,
     markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: false, extensions: [mathSyntax] }),
@@ -103,13 +109,16 @@ function extensionsForDocument(): Extension[] {
           return true;
         }
         const html = event.clipboardData?.getData("text/html");
-        if (!html) return false;
+        // In code, math, or HTML the text is source: rich formatting would come in as Markdown
+        // escapes and marks (a <pre> as a fence that closes the one it's pasted into).
+        const { from: at, to: end } = view.state.selection.main;
+        if (!html || insideLiteral(view.state, at) || insideLiteral(view.state, end)) return false;
         const markdown = htmlToMarkdown(html);
         if (markdown === null) return false;
         event.preventDefault();
         const { state } = view;
         const { from, to } = state.selection.main;
-        const insert = markdown.replace(/\n/g, state.lineBreak);
+        const insert = pastedMarkdown(state, from, to, markdown);
         view.dispatch({
           changes: { from, to, insert },
           selection: { anchor: from + state.toText(insert).length },
@@ -316,6 +325,8 @@ const doc: ShellDocument = {
   refreshImages: () => refreshImageResolver(view),
   refreshRendering: () => refreshRendering(view),
   scrollToAnchor: (fragment) => scrollToAnchor(view, fragment),
+  lockEdits: (locked) => { editsLocked = locked; },
+  isLocked: () => editsLocked,
   onChange: (callback) => { documentChanged = callback; },
 };
 
@@ -345,6 +356,8 @@ if (!native) (window as unknown as { __ov: unknown }).__ov = {
   headingSlugs: () => headingSlugs(view.state),
   onUpdate: (probe: (u: ViewUpdate) => void) => { updateProbes.push(probe); },
   htmlToMarkdown,
+  lockEdits: doc.lockEdits,
+  isolateHistory,
   // The app reads this from settings.json; off by default, as there.
   setRemoteImages: (on: boolean) => { setRemoteImages(view, on); },
   // The app reads this from settings.json; on by default, as there.

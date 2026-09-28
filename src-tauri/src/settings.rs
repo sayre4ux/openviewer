@@ -37,6 +37,8 @@ pub struct SettingsPayload {
   #[serde(flatten)]
   pub settings: Settings,
   pub resolved_language: String,
+  // settings.json exists but couldn't be read: Settings says so next to the switch it turned off.
+  pub unreadable: bool,
 }
 
 fn default_image_folder() -> String {
@@ -103,29 +105,41 @@ pub fn resolve_language(setting: &str) -> String {
   preferred_languages().iter().find_map(|locale| locale_language(locale)).unwrap_or("en").to_string()
 }
 
-fn payload(settings: Settings) -> SettingsPayload {
-  SettingsPayload { resolved_language: resolve_language(&settings.language), settings }
+fn payload(settings: Settings, unreadable: bool) -> SettingsPayload {
+  SettingsPayload { resolved_language: resolve_language(&settings.language), settings, unreadable }
 }
 
 #[derive(Default)]
-pub struct SettingsState(pub Mutex<Settings>);
+pub struct SettingsState(pub Mutex<Settings>, Mutex<bool>);
 
 fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
   Ok(app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json"))
 }
 
-fn read(path: &Path) -> Settings {
-  let Ok(file) = platform::open_for_read(path) else { return Settings::default() };
+// No file yet (first launch) means the defaults. A file that exists but can't be read or parsed
+// means the defaults with diagrams off (true in the second value): the switch is a safety valve, and
+// the file may be saying off.
+// DECISION: the next save from Settings writes that off too. Turning diagrams back on silently could undo
+// a choice the unreadable file held; Settings says why the switch is off, and one click turns it on.
+fn read(path: &Path) -> (Settings, bool) {
+  if matches!(fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+    return (Settings::default(), false);
+  }
+  let unreadable = (Settings { diagrams: false, ..Settings::default() }, true);
+  let Ok(file) = platform::open_for_read(path) else { return unreadable };
   let mut buf = Vec::new();
   if file.take(SETTINGS_LIMIT + 1).read_to_end(&mut buf).is_err() || buf.len() as u64 > SETTINGS_LIMIT {
-    return Settings::default();
+    return unreadable;
   }
-  serde_json::from_slice::<Settings>(&buf).map(Settings::sanitized).unwrap_or_default()
+  serde_json::from_slice::<Settings>(&buf).map(|s| (s.sanitized(), false)).unwrap_or(unreadable)
 }
 
 pub fn load<R: Runtime>(app: &AppHandle<R>) {
   if let Ok(path) = file_path(app) {
-    *app.state::<SettingsState>().0.lock().unwrap() = read(&path);
+    let (settings, unreadable) = read(&path);
+    let state = app.state::<SettingsState>();
+    *state.0.lock().unwrap() = settings;
+    *state.1.lock().unwrap() = unreadable;
   }
   let resolved = resolve_language(&app.state::<SettingsState>().0.lock().unwrap().language);
   i18n::set_language(&resolved);
@@ -133,7 +147,7 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) {
 
 #[tauri::command]
 pub fn get_settings(state: tauri::State<SettingsState>) -> SettingsPayload {
-  payload(state.0.lock().unwrap().clone())
+  payload(state.0.lock().unwrap().clone(), *state.1.lock().unwrap())
 }
 
 #[tauri::command]
@@ -148,13 +162,15 @@ pub fn set_settings<R: Runtime>(app: AppHandle<R>, settings: Settings) -> Result
     let mut current = state.0.lock().unwrap();
     let changed = current.language != clean.language;
     *current = clean.clone();
+    // The file on disk is good again.
+    *state.1.lock().unwrap() = false;
     changed
   };
   let resolved = resolve_language(&clean.language);
   i18n::set_language(&resolved);
   if language_changed { crate::menu::refresh_localized(&app); }
   else { let _ = crate::menu::rebuild(&app); }
-  let result = payload(clean);
+  let result = payload(clean, false);
   let _ = app.emit("settings-changed", result.clone());
   Ok(result)
 }
@@ -185,6 +201,24 @@ mod tests {
   }
 
   #[test]
+  fn a_settings_file_that_does_not_parse_turns_diagrams_off() {
+    let dir = std::env::temp_dir().join(format!("openviewer-settings-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.json");
+    assert!(read(&path) == (Settings::default(), false), "no file yet: the defaults");
+    fs::write(&path, r#"{"diagrams": false, "imageFolder": "#).unwrap();
+    let (truncated, truncated_flag) = read(&path);
+    fs::write(&path, r#"{"diagrams": "no"}"#).unwrap();
+    let (wrong_type, _) = read(&path);
+    fs::write(&path, r#"{"imageFolder": "."}"#).unwrap();
+    let (valid, valid_flag) = read(&path);
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!truncated.diagrams && !truncated.remote_images && truncated_flag);
+    assert!(!wrong_type.diagrams);
+    assert!(valid.diagrams && valid.image_folder == "." && !valid_flag);
+  }
+
+  #[test]
   fn diagrams_default_on() {
     assert!(Settings::default().diagrams);
     let s: Settings = serde_json::from_str(r#"{"imageFolder":"."}"#).unwrap();
@@ -200,18 +234,13 @@ mod tests {
   fn language_setting_is_validated_and_resolved() {
     let s: Settings = serde_json::from_str(r#"{"language":"fr"}"#).unwrap();
     assert_eq!(s.sanitized().language, "system");
-    assert_eq!(locale_language("zh-HK"), Some("zh-Hant"));
-    assert_eq!(locale_language("zh-TW"), Some("zh-Hant"));
-    assert_eq!(locale_language("zh-MO"), Some("zh-Hant"));
-    assert_eq!(locale_language("zh-Hant-HK"), Some("zh-Hant"));
-    assert_eq!(locale_language("zh-CN"), Some("zh-Hans"));
-    assert_eq!(locale_language("zh-SG"), Some("zh-Hans"));
-    assert_eq!(locale_language("zh-Hans-SG"), Some("zh-Hans"));
-    assert_eq!(locale_language("zh"), Some("zh-Hans"));
-    assert_eq!(locale_language("ja-JP"), Some("ja"));
-    assert_eq!(locale_language("fr-FR"), None);
+    // The same cases check the browser build's resolver (check-l10n.mjs), so the two can't drift.
+    let cases: Vec<(String, Option<String>)> = serde_json::from_str(include_str!("../../src/shared/locale-cases.json")).unwrap();
+    for (locale, expected) in cases {
+      assert_eq!(locale_language(&locale), expected.as_deref(), "{locale}");
+    }
     assert_eq!(resolve_language("zh-Hans"), "zh-Hans");
-    let payload = serde_json::to_value(payload(Settings { language: "ja".into(), ..Settings::default() })).unwrap();
+    let payload = serde_json::to_value(payload(Settings { language: "ja".into(), ..Settings::default() }, false)).unwrap();
     assert_eq!(payload["language"], "ja");
     assert_eq!(payload["resolvedLanguage"], "ja");
   }

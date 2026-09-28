@@ -18,6 +18,7 @@ function run(label, cmd, args, opts = {}) {
 
 run("typecheck", "npx", ["tsc", "--noEmit"]);
 run("rust tests", "cargo", ["test", "--quiet"], { cwd: "src-tauri" });
+run("release script tests", process.execPath, ["--test", "scripts/release.test.mjs"]);
 
 // OV_PORT lets two checkouts (git worktrees) run their suites at the same time.
 const port = process.env.OV_PORT ?? "5173";

@@ -6,6 +6,8 @@ export interface Settings {
   diagrams: boolean;
   language: LanguageSetting;
   resolvedLanguage?: string;
+  // The app's settings.json exists but couldn't be read; diagrams were turned off because of it.
+  unreadable?: boolean;
 }
 
 const KEY = "openviewer.settings";
@@ -89,7 +91,8 @@ export async function updateSettings(change: Partial<Settings>): Promise<Setting
     const { invoke } = await import("@tauri-apps/api/core");
     saved = await invoke<Settings>("set_settings", { settings: next });
   } else {
-    saved = { ...next, resolvedLanguage: resolved(next) };
+    // A save writes a good file, as in the app.
+    saved = { ...next, resolvedLanguage: resolved(next), unreadable: false };
     localStorage.setItem(KEY, JSON.stringify(saved));
   }
   receive(saved);

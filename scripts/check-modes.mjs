@@ -42,6 +42,12 @@ const active = await page.textContent(".ov-outline-item.is-active");
 check("outline click jumps", jumped === "### A quieter third heading", jumped);
 check("outline marks current", active === "A quieter third heading", active);
 await page.screenshot({ path: `${out}/m1-outline.png` });
+// Outline labels are the text heading ids come from: a literal underscore stays, marks go.
+await page.evaluate(() => window.__ov.load("## foo_bar\n\n## _em_ and **bold** ##\n\n## [a link](https://x.test) and `code`\n\nSetext\n------\n"));
+await settle();
+const labels = await page.$$eval(".ov-outline-item", (els) => els.map((e) => e.textContent));
+check("outline labels match heading ids' text", JSON.stringify(labels) === JSON.stringify(["foo_bar", "em and bold", "a link and code", "Setext"]), JSON.stringify(labels));
+await page.evaluate(() => window.__ov.load(window.__ov.source)); await settle();
 
 // Focus mode: only the current block is at full opacity.
 await page.evaluate(() => { const v = window.__ov.view; const i = v.state.doc.toString().indexOf("The column stays"); v.dispatch({ selection: { anchor: i + 5 }, scrollIntoView: true }); v.focus(); });

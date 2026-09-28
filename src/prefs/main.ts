@@ -1,4 +1,4 @@
-import { createKeybindingStore } from "../shared/keybindings";
+import { createKeybindingStore, type KeybindingState } from "../shared/keybindings";
 import { commandDefs, display, effectiveKeys, fromEvent, isUsable, type Overrides, reserved } from "../shared/keys";
 import { applyTranslations, onLanguageChange, setLanguage, t } from "../shared/i18n";
 import { setupImagesPane } from "./images";
@@ -16,9 +16,8 @@ const problemsEl = document.getElementById("problems")!;
 let confirmResetAll = false;
 
 // Problems with a hand-edited keybindings.json. The listed settings are the last good ones.
-function showProblems(problems: string[]) {
+function showProblems({ problems, broken }: KeybindingState) {
   problemsEl.hidden = problems.length === 0;
-  const broken = problems.some((p) => p.startsWith("keybindings.json"));
   problemsEl.innerHTML =
     `<ul>${problems.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>` +
     (broken ? `<p>${escapeHtml(t("settings.shortcuts.problemRecovery"))}</p>` : "");
@@ -35,14 +34,8 @@ let notice: {
 
 const defaults = effectiveKeys({});
 const labelOf = (id: string) => commandDefs.some((c) => c.id === id) ? t(`command.${id}`) : id;
-const reservedLabels: Record<string, string> = {
-  Quit: "reserved.quit", Settings: "reserved.settings", "Hide OpenViewer": "reserved.hide", "Hide Others": "reserved.hideOthers", Minimize: "reserved.minimize",
-  Copy: "reserved.copy", Paste: "reserved.paste", Cut: "reserved.cut", "Select All": "reserved.selectAll",
-  "App Switcher": "reserved.appSwitcher", Spotlight: "reserved.spotlight", "Cycle Windows": "reserved.cycleWindows",
-  Screenshot: "reserved.screenshot", "Screenshot to Clipboard": "reserved.screenshotClipboard", "Lock Screen": "reserved.lockScreen",
-  "Emoji & Symbols": "reserved.emojiSymbols", "Full Screen": "reserved.fullScreen",
-};
-const reservedLabel = (owner: string) => reservedLabels[owner] ? t(reservedLabels[owner]) : owner;
+// reserved.json names each owner by its catalog key under "reserved.", read by both sides.
+const reservedLabel = (owner: string) => t(`reserved.${owner}`);
 
 function keycap(shortcut: string) {
   return shortcut ? `<kbd>${escapeHtml(display(shortcut))}</kbd>` : `<span class="prefs-none">${escapeHtml(t("settings.shortcuts.none"))}</span>`;
@@ -225,14 +218,13 @@ resetWrap.addEventListener("click", async (e) => {
 
 store.onChange((next) => {
   overrides = next.overrides;
-  showProblems(next.problems);
+  showProblems(next);
   if (!recording) render();
 });
 
 // In the app this window gets menu events while focused: honor Close and Quit, ignore the rest.
 if (native) {
   void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
-    const { listen } = await import("@tauri-apps/api/event");
     const { invoke } = await import("@tauri-apps/api/core");
     const win = getCurrentWindow();
     await win.listen<string>("menu", ({ payload }) => {
@@ -240,8 +232,11 @@ if (native) {
       // The menu takes ⌘Z/⇧⌘Z before the search field sees them.
       if (payload === "undo" || payload === "redo") document.execCommand(payload);
     });
-    await listen<string | null>("quit-request", async ({ payload: requestId }) => {
+    const updateRequests = new Set<string>();
+    await win.listen<string | null>("quit-request", async ({ payload: requestId }) => {
       if (typeof requestId === "string") {
+        if (updateRequests.has(requestId)) return;
+        updateRequests.add(requestId);
         await invoke("update_quit_response", { requestId, accepted: true }).catch(() => {});
         return;
       }
@@ -272,7 +267,7 @@ setupLanguagePane();
 
 void store.load().then((loaded) => {
   overrides = loaded.overrides;
-  showProblems(loaded.problems);
+  showProblems(loaded);
   render();
 });
 render();
@@ -281,7 +276,7 @@ applyTranslations();
 onLanguageChange(() => {
   void store.load().then((loaded) => {
     overrides = loaded.overrides;
-    showProblems(loaded.problems);
+    showProblems(loaded);
     if (!recording) render();
   });
   renderResetAll();

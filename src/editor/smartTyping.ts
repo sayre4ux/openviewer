@@ -1,6 +1,7 @@
 import { syntaxTree } from "@codemirror/language";
 import { type ChangeSpec, EditorSelection, type EditorState, type Line } from "@codemirror/state";
 import { type Command, EditorView, type KeyBinding } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 
 // Small typing conveniences on top of plain Markdown. Each one changes only the characters it is
 // about, as one undoable step, and falls back to the default behavior when it doesn't apply.
@@ -33,10 +34,48 @@ const spaceOutOfEmphasis = EditorView.inputHandler.of((view, from, to, text) => 
   return true;
 });
 
+// Text that is source, not prose: a `~` typed over a selection there is just a `~`.
+const LITERAL = new Set(["InlineCode", "InlineMath", "DisplayMath", "FencedCode", "CodeBlock", "HTMLBlock"]);
+
+function touchesLiteral(state: EditorState, from: number, to: number): boolean {
+  let found = false;
+  syntaxTree(state).iterate({ from, to, enter: (n) => {
+    if (found) return false;
+    if (LITERAL.has(n.name)) found = true;
+  } });
+  return found;
+}
+
+// Whether text typed or pasted at `pos` goes inside code, math, or HTML, not merely next to it. Side 0
+// enters only nodes that extend on both sides of pos. Blocks without a closing mark end at their last
+// character, though, so text at their end (or, for a fence never closed, anywhere below) is inside too.
+export function insideLiteral(state: EditorState, pos: number): boolean {
+  const tree = syntaxTree(state);
+  for (let n: SyntaxNode | null = tree.resolveInner(pos, 0); n; n = n.parent) {
+    if (LITERAL.has(n.name)) return true;
+  }
+  // Where a block that ends here ends: at pos itself (an unclosed fence takes the rest of the document,
+  // blank lines included), or at the last non-space character before it.
+  let back = pos;
+  while (back > 0 && /\s/.test(state.sliceDoc(back - 1, back))) back--;
+  for (const end of back === pos ? [pos] : [pos, back]) {
+    for (let n: SyntaxNode | null = tree.resolveInner(end, -1); n; n = n.parent) {
+      if (n.to !== end) continue;
+      if (n.name === "FencedCode") return !(n.lastChild?.name === "CodeMark" && n.lastChild.from > n.from);
+      // Indented code: only more text on its last line.
+      if (n.name === "CodeBlock") return end === pos;
+      // HTML: the same line, or the one right after it (no blank line has ended the block yet).
+      if (n.name === "HTMLBlock") return state.doc.lineAt(pos).number - state.doc.lineAt(end).number <= 1;
+    }
+  }
+  return false;
+}
+
 // `~` with text selected strikes the selection through instead of replacing it.
 const tildeStrikes = EditorView.inputHandler.of((view, _from, _to, text) => {
   if (text !== "~" || view.state.selection.ranges.every((r) => r.empty)) return false;
   const { state } = view;
+  if (state.selection.ranges.some((r) => !r.empty && touchesLiteral(state, r.from, r.to))) return false;
   view.dispatch(state.update(state.changeByRange((range) => {
     if (range.empty) return { range };
     return {

@@ -80,6 +80,7 @@
             <h2 data-i18n="settings.images.diagrams.title">Diagrams</h2>
             <label class="prefs-choice"><input id="diagrams" type="checkbox" />
               <span><strong class="prefs-plain" data-i18n="settings.images.diagrams.label">Draw Mermaid diagrams</strong> <span class="prefs-choice-note" data-i18n="settings.images.diagrams.default">on by default</span></span></label>
+            <p id="settings-unreadable" class="prefs-help prefs-attention" data-i18n="settings.images.diagrams.unreadable" hidden>settings.json couldn’t be read, so diagrams are off until you turn them on.</p>
             <p class="prefs-help" data-i18n="settings.images.diagrams.help">A <code>```mermaid</code> code block is drawn as a picture. Drawing happens inside a
               sealed-off part of the app with no network access, and the result is shown as an image. A badly made
               diagram can still freeze its window; if one does, OpenViewer shows its code the next time instead of

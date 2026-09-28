@@ -8,7 +8,8 @@
       "endpoints": [
         "https://github.com/sayre4ux/openviewer/releases/download/updates/latest.json"
       ],
-      "pubkey": "REPLACE_WITH_PUBLIC_KEY"
+      "pubkey": "REPLACE_WITH_PUBLIC_KEY",
+      "requireSignedVersion": true
     }
   }
 }

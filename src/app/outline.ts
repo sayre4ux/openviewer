@@ -1,6 +1,7 @@
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { headingText } from "../editor/anchors";
 import { setI18nText, t } from "../shared/i18n";
 
 // Outline sidebar: the document's headings, indented by level. Clicking one moves the caret
@@ -10,15 +11,6 @@ interface Heading {
   level: number;
   from: number;
   text: string;
-}
-
-function headingText(raw: string) {
-  return raw
-    .replace(/^\s{0,3}#{1,6}\s*/, "")
-    .replace(/\s+#+\s*$/, "")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/(\*\*|__|\*|_|~~|`)/g, "")
-    .trim();
 }
 
 // `complete` is false when parsing the whole document didn't finish within the time budget.
@@ -31,7 +23,8 @@ function readHeadings(state: EditorState): { headings: Heading[]; complete: bool
       const m = /^(?:ATX|Setext)Heading(\d)$/.exec(node.name);
       if (!m) return;
       const line = state.doc.lineAt(node.from);
-      out.push({ level: Number(m[1]), from: line.from, text: headingText(line.text) || t("outline.untitledHeading") });
+      // The same text heading ids are made from, so a label and its #id never disagree.
+      out.push({ level: Number(m[1]), from: line.from, text: headingText(state, node.node).trim() || t("outline.untitledHeading") });
       return false;
     },
   });

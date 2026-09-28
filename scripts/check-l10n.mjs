@@ -1,6 +1,7 @@
 // Behavior checks for language switching in the editor and Settings window (browser mode).
 // Usage: node scripts/check-l10n.mjs [outDir] [chromium|webkit]
 import { chromium, webkit } from "playwright";
+import { readFileSync } from "node:fs";
 
 const engine = process.argv[3] ?? "chromium";
 const browser = engine === "webkit" ? await webkit.launch() : await chromium.launch({ channel: "chrome" });
@@ -107,6 +108,15 @@ for (const locale of locales) {
 await prefs.selectOption("#language", "en");
 await prefs.waitForFunction(() => document.documentElement.lang === "en");
 check("Settings switching back restores English", (await prefs.locator('.prefs-tab[data-pane="images"]').textContent()) === "Images");
+
+// The browser build's system-language resolver against the cases Rust's resolver is tested with.
+const localeCases = JSON.parse(readFileSync(new URL("../src/shared/locale-cases.json", import.meta.url), "utf8"));
+const resolvedLocales = await prefs.evaluate(async (cases) => {
+  const { resolveSystemLanguage } = await import("/src/shared/i18n.ts");
+  return cases.map(([locale]) => resolveSystemLanguage([locale]));
+}, localeCases);
+const mismatched = localeCases.filter(([, expected], i) => resolvedLocales[i] !== (expected ?? "en"));
+check("system language resolves like the app's (shared cases)", mismatched.length === 0, JSON.stringify(mismatched));
 
 console.log(`${results.filter(Boolean).length}/${results.length} passed`);
 await browser.close();

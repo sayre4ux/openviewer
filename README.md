@@ -68,23 +68,26 @@ OpenViewer updates itself with Tauri's updater: it checks a signed feed on GitHu
 updates signed with the project's key.
 
 1. **Once:** create the updater key pair and keep the private key out of the repository:
-   `npx tauri signer generate -w ~/.tauri/openviewer.key`. Paste the public key into
-   `src-tauri/tauri.release.conf.json`. The public GitHub repository `sayre4ux/openviewer` must exist
+   `npx tauri signer generate -w ~/.tauri/openviewer.key`. Paste the contents of
+   `~/.tauri/openviewer.key.pub` (one base64 line) into `src-tauri/tauri.release.conf.json`. The public GitHub repository `sayre4ux/openviewer` must exist
    before the first release is published.
 2. **Set the version:** `npm run release -- --version 0.1.0-beta.1` updates `package.json`,
-   `Cargo.toml`, and `tauri.conf.json`; review and commit the change. Write the notes in
-   `release-notes/<version>.md`.
+   `Cargo.toml`, and `tauri.conf.json`. Write the notes in `release-notes/<version>.md`, then review
+   and commit both (the release refuses to build from a tree with changes). Push before publishing:
+   the release tag is made at the commit that was built.
 3. **Build:** with `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has
    one) set, `npm run release` builds the app, the signed update archive, the download zip (made with
-   `ditto`, so the signature survives), and `latest.json` into `release/<version>/`. It only prints the
-   publishing commands. `--universal` builds for Apple silicon and Intel.
+   `ditto`, so the signature survives), and `latest.json` into `release/<version>/`, and checks the
+   update's signature against the public key the app ships with. It only prints the publishing
+   commands. `--universal` builds for Apple silicon and Intel.
 4. **Sign and notarize (when available):** set `APPLE_SIGNING_IDENTITY` for Developer ID signing, and
    `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID` to notarize. Without them
    the build is signed ad hoc, and testers use Open Anyway on first launch.
-5. **Publish:** `npm run release -- --publish` creates the GitHub release (a pre-release for versions
+5. **Publish:** `npm run release -- --universal --publish` creates the GitHub release (a pre-release for versions
    like `0.1.0-beta.1`) and replaces `latest.json` on the release tagged `updates`, which is where the app
    looks. A fixed tag is used because GitHub's "latest release" link skips pre-releases, so testers on a
-   beta would never see the next one. Don't delete the `updates` release.
+   beta would never see the next one. Don't delete the `updates` release. Publishing needs
+   `--universal`: the one `latest.json` serves both kinds of Mac.
 
 ## Security
 

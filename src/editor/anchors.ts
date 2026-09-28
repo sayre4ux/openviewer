@@ -14,7 +14,7 @@ const NOT_TEXT = new Set(["HeaderMark", "EmphasisMark", "CodeMark", "Strikethrou
 
 // The heading's text as it reads when rendered, from the syntax tree: `_emphasis_` loses its marks, a
 // literal `snake_case` keeps its underscore, `\*` is a star, and a link is its text.
-function headingText(state: EditorState, heading: SyntaxNode) {
+export function headingText(state: EditorState, heading: SyntaxNode) {
   let text = "";
   let pos = heading.from;
   const skip = (node: SyntaxNode) => {

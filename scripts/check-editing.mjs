@@ -75,6 +75,16 @@ try {
   const spanning = await docText();
   check("a replacement with a line break keeps CRLF, from an escape or from $&",
     escaped === "one\r\ntwo beta\r\nx\r\ny\r\n" && spanning === "one\r\ntwo beta\r\n[x\r\ny]\r\n", JSON.stringify({ escaped, spanning }));
+  // The CRLF filter rebuilds a transaction with a stray "\n"; an isolated one must stay its own undo step.
+  const isolated = await page.evaluate(() => {
+    window.__ov.load("x\r\n");
+    const v = window.__ov.view;
+    v.dispatch({ changes: { from: 1, insert: "a" }, userEvent: "input.type" });
+    v.dispatch({ changes: { from: 2, insert: "1\n2" }, userEvent: "input.type", annotations: window.__ov.isolateHistory.of("full") });
+    window.__ov.commands.undo();
+    return v.state.sliceDoc();
+  });
+  check("an isolated edit through the CRLF filter undoes on its own", isolated === "xa\r\n", JSON.stringify(isolated));
   await load("a\nb\nc\n");
   await run("find"); await settle();
   await fields.nth(0).fill("^"); await settle();
@@ -117,6 +127,14 @@ try {
   await page.evaluate(() => window.__ov.view.dispatch({ selection: { anchor: 0, head: 6 } }));
   await page.keyboard.type("~"); await settle();
   check("~ with a selection strikes it through", (await docText()) === "~~strike~~ me\n", JSON.stringify(await docText()));
+  await load("$x+y$ and `code`\n\n```\nfenced\n```\n");
+  await page.evaluate(() => window.__ov.view.dispatch({ selection: { anchor: 1, head: 2 } }));
+  await page.keyboard.type("~"); await settle();
+  await page.evaluate(() => { const v = window.__ov.view; const at = v.state.doc.toString().indexOf("code"); v.dispatch({ selection: { anchor: at, head: at + 4 } }); });
+  await page.keyboard.type("~"); await settle();
+  await page.evaluate(() => { const v = window.__ov.view; const at = v.state.doc.toString().indexOf("fenced"); v.dispatch({ selection: { anchor: at, head: at + 6 } }); });
+  await page.keyboard.type("~"); await settle();
+  check("~ over a selection in math or code is just a ~", (await docText()) === "$~+y$ and `~`\n\n```\n~\n```\n", JSON.stringify(await docText()));
   await load("plain words\n");
   await page.evaluate(() => window.__ov.view.dispatch({ selection: { anchor: 0, head: 5 } }));
   await run("strikethrough"); await settle();
@@ -211,6 +229,18 @@ try {
   await page.locator('.cm-md-link[data-href="#hidden"]').click({ modifiers: [mod] }); await settle(200);
   check("a link into a collapsed section unfolds it",
     (await page.evaluate(() => document.querySelectorAll(".cm-md-folded").length)) === 0);
+  await load(`| go |\n|---|\n| [the end](#the-end) |\n\n${filler}\n\n## The End\n\n${filler}\n`, 0);
+  await page.evaluate(() => { document.querySelector(".cm-scroller").scrollTop = 0; });
+  await settle();
+  await page.locator('.cm-md-cell [data-href="#the-end"]').click({ modifiers: [mod] }); await settle(300);
+  const fromCell = await page.evaluate(() => {
+    const scroller = document.querySelector(".cm-scroller");
+    const v = window.__ov.view;
+    const at = v.coordsAtPos(v.state.doc.toString().indexOf("## The End"));
+    return { scrollTop: scroller.scrollTop, top: at ? Math.round(at.top - scroller.getBoundingClientRect().top) : null };
+  });
+  check("⌘-clicking a heading link in a table cell scrolls to it",
+    fromCell.scrollTop > 1000 && fromCell.top !== null && fromCell.top >= 0 && fromCell.top < 200, JSON.stringify(fromCell));
 
   // ---------- Zoom ----------
   await run("zoom-in"); await run("zoom-in"); await settle();
@@ -261,6 +291,25 @@ try {
   });
   await run("actual-size");
   check("zoom follows in other windows", followed === "17.6px", followed);
+
+  // After a window approves an update it takes no edits: typing, table cells, and Replace All.
+  await load("keep this\n\n| a | b |\n|---|---|\n| cell | x |\n\n", 4);
+  await page.evaluate(() => window.__ov.lockEdits(true));
+  await page.keyboard.type("XYZ"); await settle();
+  await page.locator('.cm-md-cell[data-row="1"]').first().click();
+  await page.keyboard.type("Q"); await settle(300);
+  await page.locator(".cm-content").click({ position: { x: 5, y: 5 } }); await settle(200);
+  await run("replace"); await settle();
+  await page.locator(".ov-find-field").first().fill("keep");
+  await page.locator(".ov-find-field").nth(1).fill("lost");
+  await page.click('.ov-find-button[title="Replace all matches"]'); await settle();
+  await page.locator(".ov-find-field").first().focus(); await page.keyboard.press("Escape"); await settle();
+  const locked = await docText();
+  await page.evaluate(() => window.__ov.lockEdits(false));
+  await load("abc", 3);
+  await page.keyboard.type("d"); await settle();
+  check("a locked editor keeps its text, and unlocking takes edits again",
+    locked === "keep this\n\n| a | b |\n|---|---|\n| cell | x |\n\n" && await docText() === "abcd", JSON.stringify({ locked, after: await docText() }));
 } catch (error) {
   check("suite ran to the end", false, String(error));
 }

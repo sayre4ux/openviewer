@@ -6,9 +6,11 @@ import { t } from "./i18n";
 // localStorage.
 
 // `problems`: what's wrong with a hand-edited keybindings.json (bad JSON, dropped entries).
+// `broken`: the file couldn't be used at all, so the shortcuts are the last good ones (app only).
 export interface KeybindingState {
   overrides: Overrides;
   problems: string[];
+  broken?: boolean;
 }
 
 export interface KeybindingStore {
@@ -51,7 +53,7 @@ function browserStore(): KeybindingStore {
   };
 }
 
-const checked = (s: KeybindingState): KeybindingState => ({ overrides: sanitize(s.overrides), problems: s.problems ?? [] });
+const checked = (s: KeybindingState): KeybindingState => ({ overrides: sanitize(s.overrides), problems: s.problems ?? [], broken: s.broken === true });
 
 function nativeStore(): KeybindingStore {
   const core = import("@tauri-apps/api/core");

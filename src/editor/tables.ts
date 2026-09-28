@@ -4,6 +4,7 @@ import { type ChangeSpec, type EditorState, Prec, type Range, StateField } from 
 import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { setI18nAttribute, setI18nText } from "../shared/i18n";
+import { scrollToAnchor } from "./anchors";
 import { fromEvent } from "../shared/keys";
 
 // GFM tables render as an editable <table>, as in Typora. Each cell is its own small editor:
@@ -477,7 +478,10 @@ class TableWidget extends WidgetType {
       const link = (e.target as HTMLElement).closest("[data-href]");
       if ((e.metaKey || e.ctrlKey) && link) {
         e.preventDefault();
-        window.dispatchEvent(new CustomEvent("openviewer:open-link", { detail: link.getAttribute("data-href") }));
+        // As in livePreview's linkClick: a heading in this document is followed here.
+        const href = link.getAttribute("data-href") ?? "";
+        if (href.startsWith("#")) scrollToAnchor(view, href);
+        else window.dispatchEvent(new CustomEvent("openviewer:open-link", { detail: href }));
         return;
       }
       if (document.activeElement === cell) return;
@@ -900,6 +904,63 @@ const tableKeys = Prec.high(
 );
 
 export const tables = [tableField, tableKeys];
+
+const QUOTE_MARKS = /^(?: {0,3}>[ \t]?)*/;
+const LIST_MARKER = /^( *)([-+*]|\d{1,9}[.)])( {1,4})/;
+
+// What a new line at `pos` needs in front of it to stay in the same container: the quote marks, then
+// the list item's content indent. `here` is how much of pos's own line is that prefix (on an item's
+// first line it is the bullet, not spaces).
+function containerPrefix(state: EditorState, pos: number): { next: string; here: number } {
+  const line = state.doc.lineAt(pos);
+  let quoted = false;
+  let item: SyntaxNode | null = null;
+  for (let n: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1); n; n = n.parent) {
+    if (n.name === "Blockquote") quoted = true;
+    if (n.name === "ListItem" && !item) item = n;
+  }
+  const quote = quoted ? QUOTE_MARKS.exec(line.text)![0] : "";
+  if (!item) return { next: quote, here: quote.length };
+  const itemLine = state.doc.lineAt(item.from);
+  const marker = LIST_MARKER.exec(itemLine.text.slice(QUOTE_MARKS.exec(itemLine.text)![0].length));
+  const indent = marker ? " ".repeat(marker[0].length) : "";
+  const own = line.number === itemLine.number && marker ? marker[0] : /^ */.exec(line.text.slice(quote.length))![0].slice(0, indent.length);
+  return { next: quote + indent, here: quote.length + own.length };
+}
+
+// Blank-content test for a neighbouring line: quote marks and spaces don't count as text.
+const blank = (text: string) => text.replace(QUOTE_MARKS, "").trim() === "";
+
+// The text to insert for pasted Markdown (with "\n" breaks) replacing from–to. When it starts or ends
+// with a table row it gets blank lines around it, as with insertTable: text touching a table would be
+// read as its header's paragraph or as another row. Inside a quote or list item every new line keeps
+// the container's prefix, so the table stays in it. Line breaks are the document's.
+export function pastedMarkdown(state: EditorState, from: number, to: number, markdown: string): string {
+  const br = state.lineBreak;
+  const lines = markdown.split("\n");
+  const isRow = (line: string) => /^\s*(>\s*)*\|/.test(line);
+  const { next, here } = containerPrefix(state, from);
+  let before = "";
+  let after = "";
+  if (isRow(lines[0])) {
+    const start = state.doc.lineAt(from);
+    if (state.sliceDoc(Math.min(start.from + here, from), from).trim() !== "") before = "\n\n";
+    else if (start.number > 1 && !blank(state.doc.line(start.number - 1).text)) before = "\n";
+  }
+  const end = state.doc.lineAt(to);
+  const rest = state.sliceDoc(to, end.to);
+  if (isRow(lines[lines.length - 1])) {
+    if (rest.trim() !== "") after = "\n\n";
+    else if (end.number < state.doc.lines && !blank(state.doc.line(end.number + 1).text)) after = "\n";
+  }
+  const parts = (before + markdown + after).split("\n");
+  // The last part runs into the rest of the line, so it keeps the full prefix when text follows.
+  return parts.map((part, i) => {
+    if (i === 0) return part;
+    if (part === "" && !(i === parts.length - 1 && rest !== "")) return next.trimEnd();
+    return next + part;
+  }).join(br);
+}
 
 // ⌥⌘T: insert a 3-column table after the current block (or after the table whose cell has
 // focus, since cell focus doesn't move the editor selection) and put the caret in its first cell.

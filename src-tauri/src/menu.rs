@@ -89,28 +89,9 @@ fn usable(shortcut: &str) -> bool {
   is_fkey(parts.last().copied().unwrap_or("")) || parts.contains(&"Cmd") || parts.contains(&"Ctrl")
 }
 
+// reserved.json names each owner by its catalog key under "reserved.", read by both sides.
 fn reserved_owner(owner: &str) -> String {
-  let key = match owner {
-    "Quit" => "reserved.quit",
-    "Settings" => "reserved.settings",
-    "Hide OpenViewer" => "reserved.hide",
-    "Hide Others" => "reserved.hideOthers",
-    "Minimize" => "reserved.minimize",
-    "Copy" => "reserved.copy",
-    "Paste" => "reserved.paste",
-    "Cut" => "reserved.cut",
-    "Select All" => "reserved.selectAll",
-    "App Switcher" => "reserved.appSwitcher",
-    "Spotlight" => "reserved.spotlight",
-    "Cycle Windows" => "reserved.cycleWindows",
-    "Screenshot" => "reserved.screenshot",
-    "Screenshot to Clipboard" => "reserved.screenshotClipboard",
-    "Lock Screen" => "reserved.lockScreen",
-    "Emoji & Symbols" => "reserved.emojiSymbols",
-    "Full Screen" => "reserved.fullScreen",
-    _ => return owner.to_string(),
-  };
-  i18n::t(key)
+  i18n::t(&format!("reserved.{owner}"))
 }
 
 // Keep only known commands with well-formed, usable, unreserved shortcuts ("" = no shortcut).
@@ -170,6 +151,8 @@ pub struct Keybindings {
   modified: Mutex<Option<SystemTime>>,
   // Problems with keybindings.json (bad JSON or dropped entries), shown in Settings.
   problems: Mutex<Vec<String>>,
+  // The file couldn't be used at all, so the shortcuts shown are the last good ones.
+  broken: Mutex<bool>,
   // View checkmarks from the focused document window, kept across menu rebuilds.
   pub checks: Mutex<HashMap<String, bool>>,
 }
@@ -178,6 +161,8 @@ pub struct Keybindings {
 pub struct KeybindingState {
   overrides: HashMap<String, String>,
   problems: Vec<String>,
+  // Told apart here, not by the problem's text, which is translated.
+  broken: bool,
 }
 
 fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -233,7 +218,8 @@ fn state_of<R: Runtime>(app: &AppHandle<R>) -> KeybindingState {
   let k = app.state::<Keybindings>();
   let overrides = k.overrides.lock().unwrap().clone();
   let problems = k.problems.lock().unwrap().clone();
-  KeybindingState { overrides, problems }
+  let broken = *k.broken.lock().unwrap();
+  KeybindingState { overrides, problems, broken }
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {
@@ -251,8 +237,12 @@ fn take_file<R: Runtime>(app: &AppHandle<R>, path: &PathBuf) {
       let (overrides, problems) = found.unwrap_or_default();
       *k.overrides.lock().unwrap() = overrides;
       *k.problems.lock().unwrap() = problems;
+      *k.broken.lock().unwrap() = false;
     }
-    Err(problem) => *k.problems.lock().unwrap() = vec![problem],
+    Err(problem) => {
+      *k.problems.lock().unwrap() = vec![problem];
+      *k.broken.lock().unwrap() = true;
+    }
   }
 }
 
@@ -324,7 +314,8 @@ fn save_keybindings_file(path: &Path, clean: &HashMap<String, String>) -> Result
   }
   guard_keybindings(path)?;
   if let Err(err) = read_file(path) {
-    if err.contains("too large") {
+    // The whole message, in the current language: a substring would only match in English.
+    if err == i18n::t("keybindings.tooLarge") {
       return Err(i18n::t_with("keybindings.moveAsideSuffix", &[("error", &err)]));
     }
     backup_keybindings(path, &backup_path(path))?;
@@ -355,6 +346,7 @@ pub fn set_keybindings<R: Runtime>(app: AppHandle<R>, overrides: serde_json::Val
   *k.modified.lock().unwrap() = mtime(&path);
   *k.overrides.lock().unwrap() = clean;
   k.problems.lock().unwrap().clear();
+  *k.broken.lock().unwrap() = false;
   drop(k);
   publish(&app)
 }
@@ -425,7 +417,6 @@ fn build<R: Runtime>(app: &AppHandle<R>, overrides: &HashMap<String, String>, su
   let hide_others = i18n::t("menu.hideOthers");
   let show_all = i18n::t("menu.showAll");
   let quit = i18n::t("menu.quit");
-  let close = i18n::t("menu.close");
   let minimize = i18n::t("menu.minimize");
   let zoom = i18n::t("menu.zoom");
   let app_menu = SubmenuBuilder::new(app, app_name)
@@ -444,7 +435,6 @@ fn build<R: Runtime>(app: &AppHandle<R>, overrides: &HashMap<String, String>, su
   let window = SubmenuBuilder::new(app, i18n::t("menu.window"))
     .item(&PredefinedMenuItem::minimize(app, Some(&minimize))?)
     .item(&PredefinedMenuItem::maximize(app, Some(&zoom))?)
-    .item(&PredefinedMenuItem::close_window(app, Some(&close))?)
     .build()?;
   let menus = [
     app_menu,
@@ -603,6 +593,34 @@ mod tests {
     let err = ensure_keybindings_present(&path).unwrap_err();
     assert!(err.contains("not a regular file"), "{err}");
     let _ = fs::remove_dir_all(dir);
+  }
+
+  // Settings shows its recovery note from this flag; the problem text is translated, so it can't tell.
+  #[test]
+  fn an_unusable_file_is_reported_as_broken_and_a_good_one_clears_it() {
+    let app = tauri::test::mock_builder()
+      .manage(Keybindings::default())
+      .build(tauri::test::mock_context(tauri::test::noop_assets()))
+      .unwrap();
+    let dir = bindings_dir("state");
+    let path = dir.join("keybindings.json");
+    fs::write(&path, b"{not json").unwrap();
+    take_file(app.handle(), &path);
+    let broken = state_of(app.handle());
+    fs::write(&path, br#"{"bold": "Cmd+Shift+B", "nonsense": "Cmd+Q"}"#).unwrap();
+    take_file(app.handle(), &path);
+    let partial = state_of(app.handle());
+    let _ = fs::remove_dir_all(dir);
+    assert!(broken.broken && broken.problems.len() == 1);
+    assert!(!partial.broken && !partial.problems.is_empty(), "dropped entries are problems, not a broken file");
+  }
+
+  #[test]
+  fn every_reserved_owner_has_a_label() {
+    for owner in reserved().values() {
+      let key = format!("reserved.{owner}");
+      assert_ne!(i18n::t(&key), key, "no catalog entry for {key}");
+    }
   }
 
   #[test]

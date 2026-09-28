@@ -20,6 +20,9 @@ export interface ShellDocument {
   refreshImages(): void;
   // Redraw formulas and diagrams, after a setting that affects them changed.
   refreshRendering(): void;
+  // While locked, no transaction may change the text (an update is about to relaunch the app).
+  lockEdits(locked: boolean): void;
+  isLocked(): boolean;
   // Scroll to a heading by its GitHub-style id; false when there is none.
   scrollToAnchor(fragment: string): boolean;
   // Insert image links at a document position (or the selection) as one undoable edit.
@@ -224,7 +227,8 @@ export async function startShell(
     }
     if (links.length) doc.insertImages(links.join(" "));
   };
-  doc.onImagePaste((files) => void insertImages(files));
+  // A locked editor would drop the link, leaving only the copied file behind.
+  doc.onImagePaste((files) => { if (!doc.isLocked()) void insertImages(files); });
 
   const openPath = async (target: string): Promise<void> => {
     if (doc.isUntouched()) await openIntoCurrent(target);
@@ -368,14 +372,25 @@ export async function startShell(
   await win.listen<string>("open-path", ({ payload: target }) => {
     pendingOpen = pendingOpen.then(() => openPath(target));
   });
-  await listen<string | null>("quit-request", async ({ payload: requestId }) => {
+  // This window's own listener: Rust asks each window separately during an update, and asks again
+  // until it answers (the first ask can arrive before this listener exists).
+  const updateRequests = new Set<string>();
+  await win.listen<string | null>("quit-request", async ({ payload: requestId }) => {
+    if (typeof requestId === "string") {
+      if (updateRequests.has(requestId)) return;
+      updateRequests.add(requestId);
+    }
     const mayClose = await askToClose();
     if (typeof requestId === "string") {
-      await call("update_quit_response", { requestId, accepted: mayClose }).catch(() => {});
+      // Approving an update means the next thing is a relaunch: anything typed after the answer
+      // would be lost, so the editor takes no edits until then or until the update is called off.
+      if (mayClose) doc.lockEdits(true);
+      await call("update_quit_response", { requestId, accepted: mayClose }).catch(() => doc.lockEdits(false));
       return;
     }
     if (mayClose) { closing = true; await win.close(); }
   });
+  await listen("update-cancelled", () => doc.lockEdits(false));
 
   await win.onCloseRequested(async (event) => {
     if (closing) return;
@@ -384,6 +399,7 @@ export async function startShell(
   });
   // Image files dropped on the window: copied next to the document and linked where they were dropped.
   await win.listen<{ paths: string[]; x: number; y: number }>("dropped-images", async ({ payload }) => {
+    if (doc.isLocked()) return;
     const documentPath = await documentForImages();
     if (!documentPath) return;
     const scale = window.devicePixelRatio || 1;

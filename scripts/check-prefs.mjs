@@ -166,6 +166,19 @@ check("diagrams choice kept with the others",
   JSON.stringify(diagramSettings));
 await page.screenshot({ path: `${out}/p6-diagrams.png`, fullPage: true });
 
+// An unreadable settings.json turned diagrams off: Settings says so, until a save writes a good file.
+check("no unreadable note normally", !(await page.isVisible("#settings-unreadable")));
+await page.evaluate(() => localStorage.setItem("openviewer.settings", JSON.stringify({ diagrams: false, unreadable: true, language: "en" })));
+await page.reload(); await showShortcuts(page); await settle();
+await page.click('.prefs-tab[data-pane="images"]'); await settle();
+const noteShown = await page.isVisible("#settings-unreadable");
+const noteText = await page.textContent("#settings-unreadable");
+await page.locator("#settings-unreadable").locator("xpath=..").screenshot({ path: `${out}/p6b-unreadable.png` });
+await page.click("#diagrams"); await settle();
+check("an unreadable settings file is explained next to the diagrams switch, and a save clears it",
+  noteShown && noteText.includes("couldn’t be read") && !(await page.isVisible("#settings-unreadable")) && await page.isChecked("#diagrams"),
+  JSON.stringify({ noteShown, noteText }));
+
 // Undo rebound onto a key cells use for navigation still undoes in a cell.
 await page.evaluate(() => localStorage.setItem("openviewer.keybindings", JSON.stringify({ undo: "Cmd+Left" })));
 await page.setViewportSize({ width: 1100, height: 700 });
