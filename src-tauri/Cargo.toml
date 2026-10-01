@@ -1,6 +1,6 @@
 [package]
 name = "openviewer"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 description = "A Typora-style Markdown editor for macOS with the Newsprint look"
 license = "MIT"
 edition = "2021"
