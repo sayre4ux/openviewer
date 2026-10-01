@@ -248,6 +248,11 @@ function targetInfo(universal) {
   if (process.platform !== "darwin") fail("Release builds require macOS, Xcode tools, and ditto.");
   if (universal) {
     const required = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+    if (spawnSync("rustup", ["--version"], { stdio: "ignore" }).error) {
+      fail("Universal builds need rustup to add the Intel target; Homebrew's rust can't.\n" +
+        "Install it with: brew install rustup, put $(brew --prefix rustup)/bin first in PATH,\n" +
+        "then: rustup default stable && rustup target add aarch64-apple-darwin x86_64-apple-darwin");
+    }
     const installed = new Set(commandOutput("rustup", ["target", "list", "--installed"]).trim().split(/\s+/));
     const missing = required.filter((target) => !installed.has(target));
     if (missing.length) fail(`Universal builds need these Rust targets: ${missing.join(", ")}\nInstall them with: rustup target add ${missing.join(" ")}`);
@@ -391,7 +396,10 @@ async function release(options) {
   // DECISION: not /releases/latest/download/, which skips pre-releases, so beta testers would never
   // see a newer beta. Betas stay marked as pre-releases.
   const feedCreate = ["release", "create", FEED_TAG, "--title", "Update feed",
-    "--notes", "OpenViewer checks this release's latest.json for updates. Don't delete it.", "--latest=false"];
+    "--notes", "OpenViewer checks this release's latest.json for updates. Don't delete it.",
+    // GitHub never marks a pre-release as Latest; `--latest=false` alone still let the feed take
+    // the label while every real release was a beta, so visitors saw a release with only latest.json.
+    "--prerelease"];
   const feedUpload = ["release", "upload", FEED_TAG, latestPath, "--clobber"];
   if (options.publish) {
     commandOutput("gh", ["-R", repo, ...publishArgs], { inherit: true });
